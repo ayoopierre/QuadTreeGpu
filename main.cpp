@@ -9,4 +9,8 @@ int main(void)
     ParallelQuadtree p(x, y, m);
     p.build_tree();
     p.dump_internals();
+
+    std::cout << "Done\n";
+
+    return 0;
 }

@@ -17,9 +17,14 @@ __device__ uint64_t expand_bits(uint32_t &v)
 void ParallelQuadtree::build_tree()
 {
     compute_codes();
+    std::printf("Compute codes\n");
 
     auto zip_begin = thrust::make_zip_iterator(thrust::make_tuple(x.begin(), y.begin(), m.begin()));
     thrust::stable_sort_by_key(code.begin(), code.end(), zip_begin);
+    std::printf("Radix sort\n");
+
+    find_leafes();
+    std::printf("Find leafs\n");
 }
 
 void ParallelQuadtree::compute_codes()
@@ -62,12 +67,12 @@ void ParallelQuadtree::compute_codes()
     // clang-format on
 }
 
-void ParallelQuadtree::find_leaves()
+void ParallelQuadtree::find_leafes()
 {
     auto zip_begin_1 = thrust::make_zip_iterator(thrust::make_tuple(code.begin(), code.begin() + 1));
     auto zip_end_1 = thrust::make_zip_iterator(thrust::make_tuple(code.end() - 1, code.end()));
 
-    /* There is at mose |Points| leafes and this is temporary anyways */
+    /* There is at most |Points| leafes and this is temporary anyways */
     thrust::device_vector<uint32_t> is_segment_start(x.size());
 
     // clang-format off
@@ -84,9 +89,11 @@ void ParallelQuadtree::find_leaves()
         }
     );
     // clang-format on
+    std::printf("Find segment starts due to encoding change\n");
 
     uint32_t groups = thrust::reduce(is_segment_start.begin(), is_segment_start.end());
     thrust::device_vector<uint32_t> group_offsets(groups);
+    std::printf("Find number of groups\n");
 
     // clang-format off
     thrust::copy_if(
@@ -97,6 +104,7 @@ void ParallelQuadtree::find_leaves()
         [] __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
+    std::printf("Copy indexes of segment starts\n");
 
     /*
     Now we can enforce len(leaf) < T. To do so we can check
@@ -109,6 +117,7 @@ void ParallelQuadtree::find_leaves()
 
     thrust::device_vector<uint32_t> segment_group_id(is_segment_start.size());
     thrust::exclusive_scan(is_segment_start.begin(), is_segment_start.end(), segment_group_id.begin());
+    std::printf("Set group ids\n");
 
     // clang-format off
     auto zip_begin_2 = thrust::make_zip_iterator(
@@ -129,17 +138,19 @@ void ParallelQuadtree::find_leaves()
         [group_offsets_arr = group_offsets.data()] __device__ (thrust::tuple<uint32_t, uint32_t> t){
             uint32_t group_id = thrust::get<0>(t);
             uint32_t index = thrust::get<1>(t);
-            uint32_t group_offset = group_offsets_arr[index];
+            uint32_t group_offset = group_offsets_arr[group_id];
             uint32_t offset_in_group = index - group_offset;
 
-            return (offset_in_group > T && offset_in_group % T == 0) ? 1 : 0;
+            return (offset_in_group > T && offset_in_group % T == 0) || (offset_in_group == 0) ? 1 : 0;
         }
     );
     // clang-format on
+    std::printf("Add splits due to threshold\n");
 
     /* Now we should have "1" whenever we should create new leaf taking T into account */
     groups = thrust::reduce(is_segment_start.begin(), is_segment_start.end());
     group_offsets.resize(groups);
+    std::printf("Count groups after threshold has been enforced -%d\n", groups);
 
     // clang-format off
     thrust::copy_if(
@@ -150,18 +161,24 @@ void ParallelQuadtree::find_leaves()
         [] __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
+    std::printf("Set new groups offsets\n");
 
     thrust::device_vector<uint32_t> lengths(groups);
+    std::printf("Length vector allocated %d\n", lengths.size());
 
     // clang-format off
     auto zip_begin_3 = thrust::make_zip_iterator(
-        thrust::make_tuple(group_offsets.begin(),
-        group_offsets.begin() + 1
-    ));
+        thrust::make_tuple(
+            group_offsets.begin(),
+            group_offsets.begin() + 1
+        )
+    );
     auto zip_end_3 = thrust::make_zip_iterator(
-        thrust::make_tuple(group_offsets.end() - 1,
-         group_offsets.end()
-    ));
+        thrust::make_tuple(
+            group_offsets.end() - 1,
+            group_offsets.end()
+        )
+    );
 
     thrust::transform(zip_begin_3, zip_end_3, lengths.begin(),
         [] __device__(thrust::tuple<uint32_t, uint32_t> t) 
@@ -173,6 +190,16 @@ void ParallelQuadtree::find_leaves()
         }
     );
     // clang-format on
+    std::printf("Set new groups lengths\n");
+
+    /* Save morton codes of leafs*/
+    thrust::device_vector<uint64_t> leaf_codes(group_offsets.size());
+    thrust::gather(group_offsets.begin(), group_offsets.end(), code.begin(), leaf_codes.begin());
+    std::printf("Gather leaf codes\n");
+
+    (void)group_offsets;
+    (void)lengths;
+    (void)leaf_codes;
 }
 
 void ParallelQuadtree::dump_internals()

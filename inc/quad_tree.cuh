@@ -7,6 +7,7 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/functional.h>
 #include <thrust/unique.h>
+#include <thrust/gather.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -26,7 +27,7 @@ public:
     void build_tree();
     /* has to stay public for lambda accessibility for thrust */
     void compute_codes();
-    void find_leaves();
+    void find_leafes();
     void dump_internals();
 private:
     /* Maximum of points in a single leaf */
