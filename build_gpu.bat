@@ -1,5 +1,5 @@
-nvcc -std=c++17 -Xcompiler "/std:c++17" ^
+nvcc -std=c++20 -Xcompiler "/std:c++20" ^
     -I"inc" -I"cuinc" ^
-    -lib -o quad_tree.lib "src/quad_tree.cu" ^
+    -o main.exe "src/quad_tree.cu" "main.cu" ^
     --compiler-options "/EHsc /MD" --extended-lambda ^
     -lcudadevrt -lcudart

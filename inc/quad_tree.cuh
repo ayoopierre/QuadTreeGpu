@@ -12,15 +12,20 @@
 #include <cstdlib>
 #include <iostream>
 
-class ParallelQuadtree
+#include "thrust_vector_concept.cuh"
+
+template <QuadTreeBackend Backend>
+class QuadTree
 {
 public:
-    using Morton = uint32_t;
+    template <typename T>
+    using thrust_vector = typename Backend::template thrust_vector_impl<T>;
 
-    ParallelQuadtree(thrust::device_vector<float> &x,
-                     thrust::device_vector<float> &y,
-                     thrust::device_vector<float> &m)
-        : x(x), y(y), m(m)
+    QuadTree(
+        thrust_vector<float> x,
+        thrust_vector<float> y,
+        thrust_vector<float> m)
+        : x(std::move(x)), y(std::move(y)), m(std::move(m))
     {
     };
 
@@ -36,13 +41,13 @@ private:
     static constexpr size_t H_max = 32;
 
     /* Input data*/
-    thrust::device_vector<float> &x;
-    thrust::device_vector<float> &y;
-    thrust::device_vector<float> &m;
+    thrust_vector<float> x;
+    thrust_vector<float> y;
+    thrust_vector<float> m;
 
     /*  */
-    thrust::device_vector<uint64_t> code;
-    thrust::device_vector<bool> is_leaf;
-    thrust::device_vector<size_t> first_child_idx;
-    thrust::device_vector<size_t> children_idx;
+    thrust_vector<uint64_t> code;
+    thrust_vector<bool> is_leaf;
+    thrust_vector<size_t> first_child_idx;
+    thrust_vector<size_t> children_idx;
 };

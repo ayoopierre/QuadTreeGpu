@@ -1,9 +1,6 @@
 #include "quad_tree.cuh"
 
-#include <thrust/extrema.h>
-#include <thrust/pair.h>
-
-__device__ uint64_t expand_bits(uint32_t &v)
+static __host__ __device__ uint64_t expand_bits(uint32_t &v)
 {
     uint64_t x = v & 0x00000000FFFFFFFF;
     x = (x | (x << 16)) & 0x0000FFFF0000FFFF;
@@ -14,7 +11,8 @@ __device__ uint64_t expand_bits(uint32_t &v)
     return x;
 }
 
-void ParallelQuadtree::build_tree()
+template <QuadTreeBackend Backend>
+inline void QuadTree<Backend>::build_tree()
 {
     compute_codes();
     std::printf("Compute codes\n");
@@ -27,19 +25,20 @@ void ParallelQuadtree::build_tree()
     std::printf("Find leafs\n");
 }
 
-void ParallelQuadtree::compute_codes()
+template <QuadTreeBackend Backend>
+void QuadTree<Backend>::compute_codes()
 {
     auto x_min_max = thrust::minmax_element(x.begin(), x.end());
     auto y_min_max = thrust::minmax_element(y.begin(), y.end());
 
-    thrust::device_vector<float> x_norm(x.size());
-    thrust::device_vector<float> y_norm(y.size());
+    thrust_vector<float> x_norm(x.size());
+    thrust_vector<float> y_norm(y.size());
 
-    auto trans_x = [x_min_max] __device__(const float &f)
+    auto trans_x = [x_min_max] __host__ __device__(const float &f)
     {
         return (f - *x_min_max.first) / *x_min_max.second;
     };
-    auto trans_y = [y_min_max] __device__(const float &f)
+    auto trans_y = [y_min_max] __host__ __device__(const float &f)
     {
         return (f - *y_min_max.first) / *y_min_max.second;
     };
@@ -54,7 +53,7 @@ void ParallelQuadtree::compute_codes()
 
     // clang-format off
     thrust::transform(zip_begin, zip_end, code.begin(), 
-        [] __device__ (thrust::tuple<float, float> t) {
+        [] __host__ __device__ (thrust::tuple<float, float> t) {
             float a = thrust::get<0>(t);
             float b = thrust::get<1>(t);
 
@@ -67,7 +66,8 @@ void ParallelQuadtree::compute_codes()
     // clang-format on
 }
 
-void ParallelQuadtree::find_leafes()
+template <QuadTreeBackend Backend>
+void QuadTree<Backend>::find_leafes()
 {
     auto zip_begin_1 = thrust::make_zip_iterator(thrust::make_tuple(code.begin(), code.begin() + 1));
     auto zip_end_1 = thrust::make_zip_iterator(thrust::make_tuple(code.end() - 1, code.end()));
@@ -77,7 +77,7 @@ void ParallelQuadtree::find_leafes()
 
     // clang-format off
     thrust::transform(zip_begin_1, zip_end_1, is_segment_start.begin(),
-        [] __device__ (thrust::tuple<uint64_t, uint64_t> t){
+        [] __host__ __device__ (thrust::tuple<uint64_t, uint64_t> t){
             uint64_t a = thrust::get<0>(t);
             uint64_t b = thrust::get<1>(t);
 
@@ -101,7 +101,7 @@ void ParallelQuadtree::find_leafes()
         thrust::make_counting_iterator<uint32_t>(is_segment_start.size()),
         is_segment_start.begin(),
         group_offsets.begin(),
-        [] __device__ (const uint32_t a) { return a == 1; }
+        [] __host__ __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
     std::printf("Copy indexes of segment starts\n");
@@ -134,8 +134,12 @@ void ParallelQuadtree::find_leafes()
         )
     );
     
+    /* Normally should do init-capture within lambda - not supported by thrust however */
+    // uint32_t* group_offsets_arr = group_offsets.data().get();
+    uint32_t* group_offsets_arr = nullptr;
+
     thrust::transform(zip_begin_2, zip_end_2, is_segment_start.begin(),
-        [group_offsets_arr = group_offsets.data()] __device__ (thrust::tuple<uint32_t, uint32_t> t){
+        [group_offsets_arr] __host__ __device__ (thrust::tuple<uint32_t, uint32_t> t){
             uint32_t group_id = thrust::get<0>(t);
             uint32_t index = thrust::get<1>(t);
             uint32_t group_offset = group_offsets_arr[group_id];
@@ -150,7 +154,7 @@ void ParallelQuadtree::find_leafes()
     /* Now we should have "1" whenever we should create new leaf taking T into account */
     groups = thrust::reduce(is_segment_start.begin(), is_segment_start.end());
     group_offsets.resize(groups);
-    std::printf("Count groups after threshold has been enforced -%d\n", groups);
+    std::printf("Count groups after threshold has been enforced %d\n", (int)groups);
 
     // clang-format off
     thrust::copy_if(
@@ -158,13 +162,13 @@ void ParallelQuadtree::find_leafes()
         thrust::make_counting_iterator<uint32_t>(is_segment_start.size()),
         is_segment_start.begin(),
         group_offsets.begin(),
-        [] __device__ (const uint32_t a) { return a == 1; }
+        [] __host__ __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
     std::printf("Set new groups offsets\n");
 
     thrust::device_vector<uint32_t> lengths(groups);
-    std::printf("Length vector allocated %d\n", lengths.size());
+    std::printf("Length vector allocated %d\n", (int)lengths.size());
 
     // clang-format off
     auto zip_begin_3 = thrust::make_zip_iterator(
@@ -181,7 +185,7 @@ void ParallelQuadtree::find_leafes()
     );
 
     thrust::transform(zip_begin_3, zip_end_3, lengths.begin(),
-        [] __device__(thrust::tuple<uint32_t, uint32_t> t) 
+        [] __host__ __device__(thrust::tuple<uint32_t, uint32_t> t) 
         { 
             uint32_t a = thrust::get<0>(t);
             uint32_t b = thrust::get<1>(t);
@@ -202,8 +206,18 @@ void ParallelQuadtree::find_leafes()
     (void)leaf_codes;
 }
 
-void ParallelQuadtree::dump_internals()
-{
+template <QuadTreeBackend Backend>
+void QuadTree<Backend>::dump_internals()
+{   
+    // if constexpr (Backend::is_device)
+    // {
+    //     thrust::host_vector<uint64_t> hcode(code);
+    // }
+    // else
+    // {
+    //     thrust::host_vector<uint64_t> &hcode = code;
+    // }
+    /* Does not work bcs of visiblity with CUDA - fallback to copy ):*/
     thrust::host_vector<uint64_t> hcode(code);
     for (const auto &lhx : hcode)
     {
