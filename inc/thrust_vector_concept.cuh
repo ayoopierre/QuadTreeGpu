@@ -26,4 +26,19 @@ concept QuadTreeBackend = requires {
     { B::is_device } -> std::convertible_to<bool>;
 };
 
+template <typename T, typename BackendType>
+struct thrust_vector_selector;
+
+template <typename T>
+struct thrust_vector_selector<T, HostTag> {
+    using type = thrust::host_vector<T>;
+    using policy = thrust::host;
+};
+
+template <typename T>
+struct thrust_vector_selector<T, DeviceTag> {
+    using type = thrust::device_vector<T>;
+    using policy = thrust::device;
+};
+
 #endif

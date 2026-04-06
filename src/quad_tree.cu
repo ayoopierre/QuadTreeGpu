@@ -15,14 +15,14 @@ template <QuadTreeBackend Backend>
 inline void QuadTree<Backend>::build_tree()
 {
     compute_codes();
-    std::printf("Compute codes\n");
+    LOG_INFO("Compute codes\n");
 
     auto zip_begin = thrust::make_zip_iterator(thrust::make_tuple(x.begin(), y.begin(), m.begin()));
     thrust::stable_sort_by_key(code.begin(), code.end(), zip_begin);
-    std::printf("Radix sort\n");
+    LOG_INFO("Radix sort\n");
 
     find_leafes();
-    std::printf("Find leafs\n");
+    LOG_INFO("Find leafs\n");
 }
 
 template <QuadTreeBackend Backend>
@@ -89,11 +89,11 @@ void QuadTree<Backend>::find_leafes()
         }
     );
     // clang-format on
-    std::printf("Find segment starts due to encoding change\n");
+    LOG_INFO("Find segment starts due to encoding change\n");
 
     uint32_t groups = thrust::reduce(is_segment_start.begin(), is_segment_start.end());
     thrust::device_vector<uint32_t> group_offsets(groups);
-    std::printf("Find number of groups\n");
+    LOG_INFO("Find number of groups\n");
 
     // clang-format off
     thrust::copy_if(
@@ -104,7 +104,7 @@ void QuadTree<Backend>::find_leafes()
         [] __host__ __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
-    std::printf("Copy indexes of segment starts\n");
+    LOG_INFO("Copy indexes of segment starts\n");
 
     /*
     Now we can enforce len(leaf) < T. To do so we can check
@@ -117,7 +117,7 @@ void QuadTree<Backend>::find_leafes()
 
     thrust::device_vector<uint32_t> segment_group_id(is_segment_start.size());
     thrust::exclusive_scan(is_segment_start.begin(), is_segment_start.end(), segment_group_id.begin());
-    std::printf("Set group ids\n");
+    LOG_INFO("Set group ids\n");
 
     // clang-format off
     auto zip_begin_2 = thrust::make_zip_iterator(
@@ -134,9 +134,8 @@ void QuadTree<Backend>::find_leafes()
         )
     );
     
-    /* Normally should do init-capture within lambda - not supported by thrust however */
-    // uint32_t* group_offsets_arr = group_offsets.data().get();
-    uint32_t* group_offsets_arr = nullptr;
+    /* Normally init-capture within lambda - not supported by thrust however */
+    uint32_t* group_offsets_arr = group_offsets.data().get();
 
     thrust::transform(zip_begin_2, zip_end_2, is_segment_start.begin(),
         [group_offsets_arr] __host__ __device__ (thrust::tuple<uint32_t, uint32_t> t){
@@ -149,12 +148,12 @@ void QuadTree<Backend>::find_leafes()
         }
     );
     // clang-format on
-    std::printf("Add splits due to threshold\n");
+    LOG_INFO("Add splits due to threshold\n");
 
     /* Now we should have "1" whenever we should create new leaf taking T into account */
     groups = thrust::reduce(is_segment_start.begin(), is_segment_start.end());
     group_offsets.resize(groups);
-    std::printf("Count groups after threshold has been enforced %d\n", (int)groups);
+    LOG_INFO("Count groups after threshold has been enforced %d\n", (int)groups);
 
     // clang-format off
     thrust::copy_if(
@@ -165,10 +164,10 @@ void QuadTree<Backend>::find_leafes()
         [] __host__ __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
-    std::printf("Set new groups offsets\n");
+    LOG_INFO("Set new groups offsets\n");
 
     thrust::device_vector<uint32_t> lengths(groups);
-    std::printf("Length vector allocated %d\n", (int)lengths.size());
+    LOG_INFO("Length vector allocated %d\n", (int)lengths.size());
 
     // clang-format off
     auto zip_begin_3 = thrust::make_zip_iterator(
@@ -194,12 +193,12 @@ void QuadTree<Backend>::find_leafes()
         }
     );
     // clang-format on
-    std::printf("Set new groups lengths\n");
+    LOG_INFO("Set new groups lengths\n");
 
     /* Save morton codes of leafs*/
     thrust::device_vector<uint64_t> leaf_codes(group_offsets.size());
     thrust::gather(group_offsets.begin(), group_offsets.end(), code.begin(), leaf_codes.begin());
-    std::printf("Gather leaf codes\n");
+    LOG_INFO("Gather leaf codes\n");
 
     (void)group_offsets;
     (void)lengths;
@@ -225,3 +224,6 @@ void QuadTree<Backend>::dump_internals()
     }
     std::cout << std::endl;
 }
+
+/* Required so compiler will generate code for both backends in static library */
+template class QuadTree<HostTag>;

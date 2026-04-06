@@ -1,3 +1,5 @@
+#include <random>
+
 #include "inc/quad_tree.cuh"
 
 int main(void)
@@ -12,6 +14,9 @@ int main(void)
 
     QuadTree<DeviceTag> tree(x, y, m);
     QuadTree<HostTag> htree(hx, hy, hm);
+
+    tree.build_tree();
+    // htree.build_tree();
 
     std::cout << "Done\n";
 
