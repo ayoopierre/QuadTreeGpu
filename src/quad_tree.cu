@@ -14,19 +14,41 @@ __device__ uint64_t expand_bits(uint32_t &v)
     return x;
 }
 
+template <typename T>
+static void dump_device_vector(const thrust::device_vector<T> &v, const char *prefix)
+{
+    std::cout << prefix << " : ";
+    for (const T &e : v)
+    {
+        std::cout << e << ", ";
+    }
+    std::cout << std::endl;
+}
+
 void ParallelQuadtree::build_tree()
 {
     compute_codes();
-    std::printf("Compute codes\n");
 
     auto zip_begin = thrust::make_zip_iterator(thrust::make_tuple(x.begin(), y.begin(), m.begin()));
     thrust::stable_sort_by_key(code.begin(), code.end(), zip_begin);
-    std::printf("Radix sort\n");
 
-    find_leafes();
-    std::printf("Find leafs\n");
+    thrust::device_vector<uint8_t> node_children;
+    thrust::device_vector<uint32_t> node_points;
+    thrust::device_vector<uint64_t> node_codes(code);
+
+    for (int i = H_max; i >= 0; i--)
+    {
+        std::tie(node_codes, node_points, node_children) = generate_quadrants_for_level(code, node_codes, i);
+        dump_device_vector<uint32_t>(node_points, "POINT COUNT");
+    }
 }
 
+/*
+    Could be better:
+        1. Find min/max for x and y
+        2. In single transform step
+           normalize and compute code
+*/
 void ParallelQuadtree::compute_codes()
 {
     auto x_min_max = thrust::minmax_element(x.begin(), x.end());
@@ -67,7 +89,11 @@ void ParallelQuadtree::compute_codes()
     // clang-format on
 }
 
-void ParallelQuadtree::find_leafes()
+std::tuple<
+    thrust::device_vector<uint32_t>,
+    thrust::device_vector<uint32_t>,
+    thrust::device_vector<uint64_t>>
+ParallelQuadtree::find_leafes()
 {
     auto zip_begin_1 = thrust::make_zip_iterator(thrust::make_tuple(code.begin(), code.begin() + 1));
     auto zip_end_1 = thrust::make_zip_iterator(thrust::make_tuple(code.end() - 1, code.end()));
@@ -89,11 +115,9 @@ void ParallelQuadtree::find_leafes()
         }
     );
     // clang-format on
-    std::printf("Find segment starts due to encoding change\n");
 
     uint32_t groups = thrust::reduce(is_segment_start.begin(), is_segment_start.end());
     thrust::device_vector<uint32_t> group_offsets(groups);
-    std::printf("Find number of groups\n");
 
     // clang-format off
     thrust::copy_if(
@@ -104,7 +128,6 @@ void ParallelQuadtree::find_leafes()
         [] __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
-    std::printf("Copy indexes of segment starts\n");
 
     /*
     Now we can enforce len(leaf) < T. To do so we can check
@@ -117,7 +140,6 @@ void ParallelQuadtree::find_leafes()
 
     thrust::device_vector<uint32_t> segment_group_id(is_segment_start.size());
     thrust::exclusive_scan(is_segment_start.begin(), is_segment_start.end(), segment_group_id.begin());
-    std::printf("Set group ids\n");
 
     // clang-format off
     auto zip_begin_2 = thrust::make_zip_iterator(
@@ -145,12 +167,10 @@ void ParallelQuadtree::find_leafes()
         }
     );
     // clang-format on
-    std::printf("Add splits due to threshold\n");
 
     /* Now we should have "1" whenever we should create new leaf taking T into account */
     groups = thrust::reduce(is_segment_start.begin(), is_segment_start.end());
     group_offsets.resize(groups);
-    std::printf("Count groups after threshold has been enforced -%d\n", groups);
 
     // clang-format off
     thrust::copy_if(
@@ -161,10 +181,8 @@ void ParallelQuadtree::find_leafes()
         [] __device__ (const uint32_t a) { return a == 1; }
     );
     // clang-format on
-    std::printf("Set new groups offsets\n");
 
     thrust::device_vector<uint32_t> lengths(groups);
-    std::printf("Length vector allocated %d\n", lengths.size());
 
     // clang-format off
     auto zip_begin_3 = thrust::make_zip_iterator(
@@ -181,7 +199,7 @@ void ParallelQuadtree::find_leafes()
     );
 
     thrust::transform(zip_begin_3, zip_end_3, lengths.begin(),
-        [] __device__(thrust::tuple<uint32_t, uint32_t> t) 
+        [] __device__ (thrust::tuple<uint32_t, uint32_t> t) 
         { 
             uint32_t a = thrust::get<0>(t);
             uint32_t b = thrust::get<1>(t);
@@ -190,16 +208,157 @@ void ParallelQuadtree::find_leafes()
         }
     );
     // clang-format on
-    std::printf("Set new groups lengths\n");
 
     /* Save morton codes of leafs*/
     thrust::device_vector<uint64_t> leaf_codes(group_offsets.size());
     thrust::gather(group_offsets.begin(), group_offsets.end(), code.begin(), leaf_codes.begin());
-    std::printf("Gather leaf codes\n");
+    // clang-format off
+    thrust::transform(leaf_codes.begin(), leaf_codes.end(), leaf_codes.begin(), 
+    [] __device__ (uint64_t code){
+        return code >> 2;
+    });
+    //clang-format on
+    
 
-    (void)group_offsets;
-    (void)lengths;
-    (void)leaf_codes;
+    return std::make_tuple(
+        std::move(group_offsets),
+        std::move(lengths),
+        std::move(leaf_codes)
+    );
+}
+
+std::tuple<
+    thrust::device_vector<uint64_t>,
+    thrust::device_vector<uint32_t>,
+    thrust::device_vector<uint8_t>> 
+ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint64_t>& code,
+    const thrust::device_vector<uint64_t>& below_code, int level)
+{
+    thrust::device_vector<bool> quad_change_indicator(code.size());
+    {
+        /*
+        1. Curentlly shift on each code happens twice. We
+        could compute shift using transform and than find
+        indicator seperatly. 
+        2. From codes below we could extract this
+        information, and there is less codes below.
+        */
+        const uint64_t *code_d = code.data().get();
+        thrust::transform(
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(quad_change_indicator.size()),
+            quad_change_indicator.begin(),
+            [level, code_d] __device__ (uint32_t i){
+                if(i == 0) return true;
+
+                uint64_t a = code_d[i];
+                uint64_t b = code_d[i - 1];
+
+                a = a >> (64 - 2 * level);
+                b = b >> (64 - 2 * level);
+
+                return (a != b) ? true : false;
+        });
+    }
+
+    uint32_t num_quadrants = thrust::reduce(quad_change_indicator.begin(), quad_change_indicator.end(), 0);
+    /* Codes of all valid quadrants at level k */
+    thrust::device_vector<uint64_t> quad_codes(num_quadrants);
+
+    thrust::copy_if(
+        code.begin(), code.end(),
+        quad_change_indicator.begin(),
+        quad_codes.begin(),
+        cuda::std::identity()
+    );
+
+    /* Number of child points for this quadrant */
+    thrust::device_vector<uint32_t> quad_point_count(num_quadrants);
+    {
+        thrust::device_vector<uint32_t> quad_end_offset(num_quadrants + 1);
+        bool *quad_change_indicator_d = quad_change_indicator.data().get();
+        uint32_t num_points = code.size();
+        thrust::copy_if(
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(num_points + 1),
+            quad_end_offset.begin(),
+            [num_quadrants, num_points, quad_change_indicator_d] __device__ (uint32_t i){ 
+                return (i == num_points) ? true : quad_change_indicator_d[i]; 
+            }
+        );
+
+        cudaDeviceSynchronize();
+        printf("Offsets\n");
+
+        uint32_t *quad_end_offset_d = quad_end_offset.data().get();
+        thrust::transform(
+            thrust::make_counting_iterator<uint32_t>(1),
+            thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
+            quad_point_count.begin(),
+            [quad_end_offset_d] __device__ (uint32_t i){
+                return quad_end_offset_d[i] - quad_end_offset_d[i - 1];
+            }
+        );
+        cudaDeviceSynchronize();
+        printf("Lengths\n");
+    }
+
+    /* Number of child nodes for this quadrant */
+    thrust::device_vector<uint8_t> quad_children_count(num_quadrants);
+    if(level != H_max)
+    {
+        thrust::device_vector<bool> quadrant_change_indicator(below_code.size());
+
+        auto zip1_beg = thrust::make_zip_iterator(thrust::make_tuple(below_code.begin(), below_code.begin() + 1));
+        auto zip1_end = thrust::make_zip_iterator(thrust::make_tuple(below_code.end() - 1, below_code.end()));
+        
+        thrust::transform(
+            zip1_beg, zip1_end, 
+            quadrant_change_indicator.begin(), 
+            [] __device__ (const thrust::tuple<uint64_t, uint64_t> t) {
+                uint64_t a = thrust::get<0>(t);
+                uint64_t b = thrust::get<1>(t);
+
+                return (a >> 2) != (b >> 2);
+            }
+        );
+
+#ifdef DEBUG
+        /* Assert on number of unique quadrants. */
+#endif
+        thrust::device_vector<uint32_t> quad_end_offset(num_quadrants);
+
+        uint32_t *quad_end_offset_d = quad_end_offset.data().get();
+        auto prev_end_it = thrust::make_transform_iterator(
+            thrust::make_counting_iterator<uint32_t>(0),
+            [quad_end_offset_d] __device__ (uint32_t i){
+                return (i == 0) ? 0 : quad_end_offset_d[i - 1];
+            }
+        );
+
+        thrust::transform(
+            quad_end_offset.begin(),
+            quad_end_offset.end(),
+            prev_end_it,
+            quad_children_count.begin(),
+            [] __device__ (uint32_t end, uint32_t prev_end){
+                return end - prev_end;
+            }
+        );
+    }
+    else{
+        thrust::fill(quad_children_count.begin(), quad_children_count.end(), 0);
+    }
+
+    return std::make_tuple<
+        thrust::device_vector<uint64_t>,
+        thrust::device_vector<uint32_t>,
+        thrust::device_vector<uint8_t>>
+    (
+        std::move(quad_codes),
+        std::move(quad_point_count),
+        std::move(quad_children_count)
+    );
 }
 
 void ParallelQuadtree::dump_internals()

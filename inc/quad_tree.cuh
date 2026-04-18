@@ -11,6 +11,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <tuple>
 
 class ParallelQuadtree
 {
@@ -20,15 +21,26 @@ public:
     ParallelQuadtree(thrust::device_vector<float> &x,
                      thrust::device_vector<float> &y,
                      thrust::device_vector<float> &m)
-        : x(x), y(y), m(m)
-    {
-    };
+        : x(x), y(y), m(m) {
+          };
 
     void build_tree();
-    /* has to stay public for lambda accessibility for thrust */
+    /* Has to stay public for lambda accessibility for thrust */
+    // Internal fields filling functions
     void compute_codes();
-    void find_leafes();
+
+    // Helpers
+    std::tuple<thrust::device_vector<uint32_t>,
+               thrust::device_vector<uint32_t>,
+               thrust::device_vector<uint64_t>>
+    find_leafes();
+    std::tuple<thrust::device_vector<uint64_t>,
+               thrust::device_vector<uint32_t>,
+               thrust::device_vector<uint8_t>>
+    generate_quadrants_for_level(const thrust::device_vector<uint64_t> &code,
+                                 const thrust::device_vector<uint64_t> &below_code, int level);
     void dump_internals();
+
 private:
     /* Maximum of points in a single leaf */
     static constexpr size_t T = 32;
