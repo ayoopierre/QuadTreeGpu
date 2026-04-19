@@ -20,7 +20,7 @@ static void dump_device_vector(const thrust::device_vector<T> &v, const char *pr
     std::cout << prefix << " : ";
     for (const T &e : v)
     {
-        std::cout << e << ", ";
+        std::cout << (uint32_t)e << ", ";
     }
     std::cout << std::endl;
 }
@@ -40,6 +40,7 @@ void ParallelQuadtree::build_tree()
     {
         std::tie(node_codes, node_points, node_children) = generate_quadrants_for_level(code, node_codes, i);
         dump_device_vector<uint32_t>(node_points, "POINT COUNT");
+        dump_device_vector<uint8_t>(node_children, "CHILD COUNT");
     }
 }
 
@@ -257,7 +258,7 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
                 a = a >> (64 - 2 * level);
                 b = b >> (64 - 2 * level);
 
-                return (a != b) ? true : false;
+                return a != b;
         });
     }
 
@@ -282,13 +283,10 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
             thrust::make_counting_iterator<uint32_t>(0),
             thrust::make_counting_iterator<uint32_t>(num_points + 1),
             quad_end_offset.begin(),
-            [num_quadrants, num_points, quad_change_indicator_d] __device__ (uint32_t i){ 
+            [num_points, quad_change_indicator_d] __device__ (uint32_t i){ 
                 return (i == num_points) ? true : quad_change_indicator_d[i]; 
             }
         );
-
-        cudaDeviceSynchronize();
-        printf("Offsets\n");
 
         uint32_t *quad_end_offset_d = quad_end_offset.data().get();
         thrust::transform(
@@ -299,8 +297,6 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
                 return quad_end_offset_d[i] - quad_end_offset_d[i - 1];
             }
         );
-        cudaDeviceSynchronize();
-        printf("Lengths\n");
     }
 
     /* Number of child nodes for this quadrant */
@@ -309,40 +305,41 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     {
         thrust::device_vector<bool> quadrant_change_indicator(below_code.size());
 
-        auto zip1_beg = thrust::make_zip_iterator(thrust::make_tuple(below_code.begin(), below_code.begin() + 1));
-        auto zip1_end = thrust::make_zip_iterator(thrust::make_tuple(below_code.end() - 1, below_code.end()));
-        
+        const uint64_t *below_code_d = below_code.data().get(); 
         thrust::transform(
-            zip1_beg, zip1_end, 
-            quadrant_change_indicator.begin(), 
-            [] __device__ (const thrust::tuple<uint64_t, uint64_t> t) {
-                uint64_t a = thrust::get<0>(t);
-                uint64_t b = thrust::get<1>(t);
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(below_code.size()),
+            quadrant_change_indicator.begin(),
+            [below_code_d, level] __device__ (uint32_t i){
+                if(i == 0) return true;
 
-                return (a >> 2) != (b >> 2);
+                uint64_t a = below_code_d[i - 1] >> (64 - 2 * level);
+                uint64_t b = below_code_d[i] >> (64 - 2 * level);
+
+                return a != b;
             }
         );
 
-#ifdef DEBUG
-        /* Assert on number of unique quadrants. */
-#endif
-        thrust::device_vector<uint32_t> quad_end_offset(num_quadrants);
+        thrust::device_vector<uint32_t> quad_end_offset(num_quadrants + 1);
+        bool *quadrant_change_indicator_d = quadrant_change_indicator.data().get();
+        uint32_t num_quads_below = below_code.size();
+        thrust::copy_if(
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(num_quads_below + 1),
+            quad_end_offset.begin(),
+            [num_quads_below, quadrant_change_indicator_d] __device__ (uint32_t i){
+                uint32_t ret = (i == num_quads_below) ? true : quadrant_change_indicator_d[i];
+                return ret; 
+            }
+        );
 
         uint32_t *quad_end_offset_d = quad_end_offset.data().get();
-        auto prev_end_it = thrust::make_transform_iterator(
-            thrust::make_counting_iterator<uint32_t>(0),
-            [quad_end_offset_d] __device__ (uint32_t i){
-                return (i == 0) ? 0 : quad_end_offset_d[i - 1];
-            }
-        );
-
         thrust::transform(
-            quad_end_offset.begin(),
-            quad_end_offset.end(),
-            prev_end_it,
+            thrust::make_counting_iterator<uint32_t>(1),
+            thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
             quad_children_count.begin(),
-            [] __device__ (uint32_t end, uint32_t prev_end){
-                return end - prev_end;
+            [quad_end_offset_d] __device__ (uint32_t i){
+                return quad_end_offset_d[i] - quad_end_offset_d[i - 1];
             }
         );
     }
@@ -359,6 +356,113 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
         std::move(quad_point_count),
         std::move(quad_children_count)
     );
+}
+
+std::tuple<thrust::device_vector<uint64_t>,
+    thrust::device_vector<uint32_t>,
+    thrust::device_vector<uint8_t>>
+ParallelQuadtree::generate_quadrants_for_level2(const thrust::device_vector<uint64_t>& code, const thrust::device_vector<uint64_t>& below_code, int level)
+{
+    thrust::device_vector<bool> code_xor_clz(code.size());
+    {
+        /*
+        1. Curentlly shift on each code happens twice. We
+        could compute shift using transform and than find
+        indicator seperatly. 
+        2. From codes below we could extract this
+        information, and there is less codes below.
+        */
+        const uint64_t *code_d = code.data().get();
+        thrust::transform(
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(code_xor_clz.size()),
+            code_xor_clz.begin(),
+            [level, code_d] __device__ (uint32_t i){
+                if(i == 0) return true;
+
+                uint64_t a = code_d[i];
+                uint64_t b = code_d[i - 1];
+
+                a = a >> (64 - 2 * level);
+                b = b >> (64 - 2 * level);
+
+                return a != b;
+        });
+    }
+
+    uint32_t num_quadrants = thrust::reduce(quad_join_indicator.begin(), quad_join_indicator.end(), 0);
+    /* Codes of all valid quadrants at level k */
+    thrust::device_vector<uint64_t> quad_codes(num_quadrants);
+
+    thrust::copy_if(
+        code.begin(), code.end(),   
+        quad_join_indicator.begin(),
+        quad_codes.begin(),
+        cuda::std::identity()
+    );
+
+    /* Number of child points for this quadrant */
+    thrust::device_vector<uint32_t> quad_point_count(num_quadrants);
+    {
+    }
+
+    /* Number of child nodes for this quadrant */
+    thrust::device_vector<uint8_t> quad_children_count(num_quadrants);
+    if(level != H_max)
+    {
+        thrust::device_vector<bool> quadrant_change_indicator(below_code.size());
+
+        const uint64_t *below_code_d = below_code.data().get(); 
+        thrust::transform(
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(below_code.size()),
+            quadrant_change_indicator.begin(),
+            [below_code_d, level] __device__ (uint32_t i){
+                if(i == 0) return true;
+
+                uint64_t a = below_code_d[i - 1] >> (64 - 2 * level);
+                uint64_t b = below_code_d[i] >> (64 - 2 * level);
+
+                return a != b;
+            }
+        );
+
+        thrust::device_vector<uint32_t> quad_end_offset(num_quadrants + 1);
+        bool *quadrant_change_indicator_d = quadrant_change_indicator.data().get();
+        uint32_t num_quads_below = below_code.size();
+        thrust::copy_if(
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(num_quads_below + 1),
+            quad_end_offset.begin(),
+            [num_quads_below, quadrant_change_indicator_d] __device__ (uint32_t i){
+                uint32_t ret = (i == num_quads_below) ? true : quadrant_change_indicator_d[i];
+                return ret; 
+            }
+        );
+
+        uint32_t *quad_end_offset_d = quad_end_offset.data().get();
+        thrust::transform(
+            thrust::make_counting_iterator<uint32_t>(1),
+            thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
+            quad_children_count.begin(),
+            [quad_end_offset_d] __device__ (uint32_t i){
+                return quad_end_offset_d[i] - quad_end_offset_d[i - 1];
+            }
+        );
+    }
+    else{
+        thrust::fill(quad_children_count.begin(), quad_children_count.end(), 0);
+    }
+
+    return std::make_tuple<
+        thrust::device_vector<uint64_t>,
+        thrust::device_vector<uint32_t>,
+        thrust::device_vector<uint8_t>>
+    (
+        std::move(quad_codes),
+        std::move(quad_point_count),
+        std::move(quad_children_count)
+    ); 
 }
 
 void ParallelQuadtree::dump_internals()

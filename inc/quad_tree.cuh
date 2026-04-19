@@ -39,6 +39,11 @@ public:
                thrust::device_vector<uint8_t>>
     generate_quadrants_for_level(const thrust::device_vector<uint64_t> &code,
                                  const thrust::device_vector<uint64_t> &below_code, int level);
+    std::tuple<thrust::device_vector<uint64_t>,
+               thrust::device_vector<uint32_t>,
+               thrust::device_vector<uint8_t>>
+    generate_quadrants_for_level2(const thrust::device_vector<uint64_t> &code,
+                                  const thrust::device_vector<uint64_t> &below_code, int level);
     void dump_internals();
 
 private:
