@@ -1,7 +1,35 @@
 #include "quad_tree.cuh"
 
+#include <list>
+
 #include <thrust/extrema.h>
 #include <thrust/pair.h>
+
+template <typename T>
+static thrust::device_vector<T> compress_vector(std::list<thrust::device_vector<T>> &vector_list)
+{
+    size_t total_len = 0;
+    for (thrust::device_vector<T> &vector : vector_list)
+        total_len += vector.size();
+
+    thrust::device_vector<T> compressed(total_len);
+
+    size_t offset = 0;
+    while (!vector_list.empty())
+    {
+        thrust::device_vector<T> vector = vector_list.front();
+        vector_list.pop_front();
+
+        cudaMemcpy(
+            compressed.data().get() + offset,
+            vector.data().get(),
+            sizeof(T) * vector.size(),
+            cudaMemcpyKind::cudaMemcpyDeviceToDevice);
+        offset += vector.size();
+    }
+
+    return std::move(compressed);
+}
 
 __device__ uint64_t expand_bits(uint32_t &v)
 {
@@ -32,16 +60,38 @@ void ParallelQuadtree::build_tree()
     auto zip_begin = thrust::make_zip_iterator(thrust::make_tuple(x.begin(), y.begin(), m.begin()));
     thrust::stable_sort_by_key(code.begin(), code.end(), zip_begin);
 
-    thrust::device_vector<uint8_t> node_children;
-    thrust::device_vector<uint32_t> node_points;
-    thrust::device_vector<uint64_t> node_codes(code);
-
-    for (int i = H_max; i >= 0; i--)
+    thrust::device_vector<uint64_t> p_key;
+    thrust::device_vector<uint32_t> nlen;
+    thrust::device_vector<uint8_t> clen;
     {
-        std::tie(node_codes, node_points, node_children) = generate_quadrants_for_level(code, node_codes, i);
-        dump_device_vector<uint32_t>(node_points, "POINT COUNT");
-        dump_device_vector<uint8_t>(node_children, "CHILD COUNT");
+        std::list<thrust::device_vector<uint8_t>> node_children_list;
+        std::list<thrust::device_vector<uint32_t>> node_points_list;
+        std::list<thrust::device_vector<uint64_t>> node_code_list;
+
+        for (int i = H_max; i >= 0; i--)
+        {
+            thrust::device_vector<uint8_t> node_children;
+            thrust::device_vector<uint32_t> node_points;
+            thrust::device_vector<uint64_t> node_codes;
+
+            const thrust::device_vector<uint64_t> *prev_codes = node_code_list.empty() ? nullptr : &node_code_list.front();
+
+            std::tie(node_codes, node_points, node_children) =
+                generate_quadrants_for_level(code, prev_codes ? *prev_codes : thrust::device_vector<uint64_t>{}, i);
+
+            node_children_list.push_front(std::move(node_children));
+            node_points_list.push_front(std::move(node_points));
+            node_code_list.push_front(std::move(node_codes));
+        }
+
+        p_key = compress_vector<uint64_t>(node_code_list);
+        nlen = compress_vector<uint32_t>(node_points_list);
+        clen = compress_vector<uint8_t>(node_children_list);
+        printf("NODES BEFORE TRIM %d\n", (int)p_key.size());
     }
+
+    trim_redundant_nodes(p_key, nlen, clen);
+    printf("NODES AFTER TRIM %d\n", (int)p_key.size());
 }
 
 /*
@@ -146,7 +196,7 @@ ParallelQuadtree::find_leafes()
     auto zip_begin_2 = thrust::make_zip_iterator(
         thrust::make_tuple(
             segment_group_id.begin(),
-            thrust::make_counting_iterator<uint32_t>(0)
+            thrust::make_counting_iterator<uint32_t>(0) 
         )
     );
 
@@ -358,111 +408,96 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     );
 }
 
-std::tuple<thrust::device_vector<uint64_t>,
-    thrust::device_vector<uint32_t>,
-    thrust::device_vector<uint8_t>>
-ParallelQuadtree::generate_quadrants_for_level2(const thrust::device_vector<uint64_t>& code, const thrust::device_vector<uint64_t>& below_code, int level)
+
+void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_key,
+    thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t> clen)
 {
-    thrust::device_vector<bool> code_xor_clz(code.size());
-    {
-        /*
-        1. Curentlly shift on each code happens twice. We
-        could compute shift using transform and than find
-        indicator seperatly. 
-        2. From codes below we could extract this
-        information, and there is less codes below.
-        */
-        const uint64_t *code_d = code.data().get();
-        thrust::transform(
-            thrust::make_counting_iterator<uint32_t>(0),
-            thrust::make_counting_iterator<uint32_t>(code_xor_clz.size()),
-            code_xor_clz.begin(),
-            [level, code_d] __device__ (uint32_t i){
-                if(i == 0) return true;
+    thrust::device_vector<uint32_t> node_child_start(clen.size()); 
+    thrust::exclusive_scan(clen.begin(), clen.end(), node_child_start.begin());
 
-                uint64_t a = code_d[i];
-                uint64_t b = code_d[i - 1];
-
-                a = a >> (64 - 2 * level);
-                b = b >> (64 - 2 * level);
-
-                return a != b;
-        });
-    }
-
-    uint32_t num_quadrants = thrust::reduce(quad_join_indicator.begin(), quad_join_indicator.end(), 0);
-    /* Codes of all valid quadrants at level k */
-    thrust::device_vector<uint64_t> quad_codes(num_quadrants);
-
-    thrust::copy_if(
-        code.begin(), code.end(),   
-        quad_join_indicator.begin(),
-        quad_codes.begin(),
-        cuda::std::identity()
+    thrust::device_vector<uint32_t> parent_id(clen.size());
+    uint32_t *node_child_start_d = node_child_start.data().get();
+    uint32_t *parent_id_d = parent_id.data().get();
+    thrust::for_each(
+        thrust::make_counting_iterator<uint32_t>(0),
+        thrust::make_counting_iterator<uint32_t>(parent_id.size()),
+        [node_child_start_d, parent_id_d] __device__ (uint32_t i){
+            /* Uncoalesed - idk how to do diffrent*/
+            parent_id_d[node_child_start_d[i]] = i;
+        }
     );
 
-    /* Number of child points for this quadrant */
-    thrust::device_vector<uint32_t> quad_point_count(num_quadrants);
-    {
-    }
+    thrust::inclusive_scan(parent_id.begin(), parent_id.end(),
+        parent_id.begin(), cuda::maximum());
 
-    /* Number of child nodes for this quadrant */
-    thrust::device_vector<uint8_t> quad_children_count(num_quadrants);
-    if(level != H_max)
-    {
-        thrust::device_vector<bool> quadrant_change_indicator(below_code.size());
+    thrust::device_vector<uint32_t> parent_point_count(clen.size());
+    uint32_t *nlen_d = nlen.data().get();
+    thrust::transform(
+        thrust::make_counting_iterator<uint32_t>(0),
+        thrust::make_counting_iterator<uint32_t>(clen.size()),
+        parent_point_count.begin(),
+        [parent_id_d, nlen_d] __device__ (uint32_t i){
+            return nlen_d[parent_id_d[i]];
+        }
+    );
 
-        const uint64_t *below_code_d = below_code.data().get(); 
-        thrust::transform(
+    auto zip_begin = thrust::make_zip_iterator(
+        thrust::make_tuple(
             thrust::make_counting_iterator<uint32_t>(0),
-            thrust::make_counting_iterator<uint32_t>(below_code.size()),
-            quadrant_change_indicator.begin(),
-            [below_code_d, level] __device__ (uint32_t i){
-                if(i == 0) return true;
+            p_key.begin(),
+            nlen.begin(),
+            clen.begin()
+        )
+    );
 
-                uint64_t a = below_code_d[i - 1] >> (64 - 2 * level);
-                uint64_t b = below_code_d[i] >> (64 - 2 * level);
+    auto zip_end = thrust::make_zip_iterator(
+        thrust::make_tuple(
+            thrust::make_counting_iterator<uint32_t>(p_key.size()),
+            p_key.end(),
+            nlen.end(),
+            clen.end()
+        )
+    );
 
-                return a != b;
-            }
-        );
+    uint32_t *parent_point_count_d = parent_point_count.data().get();
+    uint32_t threshold = T;
+    auto end = thrust::remove_if(
+        zip_begin, zip_end,
+        [parent_point_count_d, threshold] __device__ (thrust::tuple<uint32_t, uint64_t, uint32_t, uint8_t> t){
+            uint32_t i = thrust::get<0>(t);
+            return parent_point_count_d[i] <= threshold;
+        }
+    );
 
-        thrust::device_vector<uint32_t> quad_end_offset(num_quadrants + 1);
-        bool *quadrant_change_indicator_d = quadrant_change_indicator.data().get();
-        uint32_t num_quads_below = below_code.size();
-        thrust::copy_if(
-            thrust::make_counting_iterator<uint32_t>(0),
-            thrust::make_counting_iterator<uint32_t>(num_quads_below + 1),
-            quad_end_offset.begin(),
-            [num_quads_below, quadrant_change_indicator_d] __device__ (uint32_t i){
-                uint32_t ret = (i == num_quads_below) ? true : quadrant_change_indicator_d[i];
-                return ret; 
-            }
-        );
+    auto end_tuple = end.get_iterator_tuple();
 
-        uint32_t *quad_end_offset_d = quad_end_offset.data().get();
-        thrust::transform(
-            thrust::make_counting_iterator<uint32_t>(1),
-            thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
-            quad_children_count.begin(),
-            [quad_end_offset_d] __device__ (uint32_t i){
-                return quad_end_offset_d[i] - quad_end_offset_d[i - 1];
-            }
-        );
-    }
-    else{
-        thrust::fill(quad_children_count.begin(), quad_children_count.end(), 0);
-    }
+    p_key.erase(thrust::get<1>(end_tuple), p_key.end());
+    nlen.erase(thrust::get<2>(end_tuple), nlen.end());
+    clen.erase(thrust::get<3>(end_tuple), clen.end());
 
-    return std::make_tuple<
-        thrust::device_vector<uint64_t>,
-        thrust::device_vector<uint32_t>,
-        thrust::device_vector<uint8_t>>
-    (
-        std::move(quad_codes),
-        std::move(quad_point_count),
-        std::move(quad_children_count)
-    ); 
+    p_key.shrink_to_fit();
+    nlen.shrink_to_fit();
+    clen.shrink_to_fit();
+}
+
+void ParallelQuadtree::fill_tree(thrust::device_vector<uint64_t> &p_key, 
+thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t> clen)
+{
+    thrust::device_vector<bool> is_leaf(p_key.size());
+    size_t threshold = T;
+    thrust::transform(nlen.begin(), nlen.end(),
+        is_leaf.begin(), [threshold] __device__ (uint32_t len){
+            return len <= threshold;
+        }
+    );
+
+    /* Figure out how to force is_leaf to true in finest level */
+
+    /* set nlen to 0 if node is not leaf - such that it contributes 0 to prefix sum */
+
+    /* do prefix sum, this will figure out offsets in point array where each leaf points to */
+
+    /* set clen for leaf nodes to 0 */
 }
 
 void ParallelQuadtree::dump_internals()

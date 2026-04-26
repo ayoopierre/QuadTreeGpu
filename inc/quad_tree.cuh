@@ -8,6 +8,7 @@
 #include <thrust/functional.h>
 #include <thrust/unique.h>
 #include <thrust/gather.h>
+#include <thrust/remove.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -39,6 +40,11 @@ public:
                thrust::device_vector<uint8_t>>
     generate_quadrants_for_level(const thrust::device_vector<uint64_t> &code,
                                  const thrust::device_vector<uint64_t> &below_code, int level);
+    void trim_redundant_nodes(thrust::device_vector<uint64_t> &p_key, 
+                        thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t> clen);
+    void fill_tree(thrust::device_vector<uint64_t> &p_key, 
+                thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t> clen);
+
     std::tuple<thrust::device_vector<uint64_t>,
                thrust::device_vector<uint32_t>,
                thrust::device_vector<uint8_t>>
@@ -48,7 +54,7 @@ public:
 
 private:
     /* Maximum of points in a single leaf */
-    static constexpr size_t T = 32;
+    static constexpr size_t T = 2;
     /* Maximum height of quadtree */
     static constexpr size_t H_max = 32;
 
