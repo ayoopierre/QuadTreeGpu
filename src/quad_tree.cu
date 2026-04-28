@@ -87,6 +87,7 @@ void ParallelQuadtree::build_tree()
         p_key = compress_vector<uint64_t>(node_code_list);
         nlen = compress_vector<uint32_t>(node_points_list);
         clen = compress_vector<uint8_t>(node_children_list);
+        // dump_device_vector<uint32_t>(nlen, "NUMBER OF POINTS UNDER QUAD: ");
         printf("NODES BEFORE TRIM %d\n", (int)p_key.size());
     }
 
@@ -408,12 +409,12 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     );
 }
 
-
 void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_key,
-    thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t> clen)
+    thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t>& clen)
 {
     thrust::device_vector<uint32_t> node_child_start(clen.size()); 
-    thrust::exclusive_scan(clen.begin(), clen.end(), node_child_start.begin());
+    /* Value initialization is important - by default exclusive_scan happens on uint8_t and it overflows */
+    thrust::exclusive_scan(clen.begin(), clen.end(), node_child_start.begin(), uint32_t{0});
 
     thrust::device_vector<uint32_t> parent_id(clen.size());
     uint32_t *node_child_start_d = node_child_start.data().get();
@@ -423,7 +424,8 @@ void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_k
         thrust::make_counting_iterator<uint32_t>(parent_id.size()),
         [node_child_start_d, parent_id_d] __device__ (uint32_t i){
             /* Uncoalesed - idk how to do diffrent*/
-            parent_id_d[node_child_start_d[i]] = i;
+            parent_id_d[node_child_start_d[i]] = i; 
+            // printf("Parent ID - node - %u : parent - %u\n", i, node_child_start_d[i]);
         }
     );
 
@@ -437,6 +439,7 @@ void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_k
         thrust::make_counting_iterator<uint32_t>(clen.size()),
         parent_point_count.begin(),
         [parent_id_d, nlen_d] __device__ (uint32_t i){
+            // printf("Parent id %u\n", parent_id_d[i]);
             return nlen_d[parent_id_d[i]];
         }
     );
@@ -465,6 +468,7 @@ void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_k
         zip_begin, zip_end,
         [parent_point_count_d, threshold] __device__ (thrust::tuple<uint32_t, uint64_t, uint32_t, uint8_t> t){
             uint32_t i = thrust::get<0>(t);
+            // printf("%u\n", parent_point_count_d[i]);
             return parent_point_count_d[i] <= threshold;
         }
     );
@@ -481,23 +485,32 @@ void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_k
 }
 
 void ParallelQuadtree::fill_tree(thrust::device_vector<uint64_t> &p_key, 
-thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t> clen)
+thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t>& clen)
 {
     thrust::device_vector<bool> is_leaf(p_key.size());
     size_t threshold = T;
-    thrust::transform(nlen.begin(), nlen.end(),
-        is_leaf.begin(), [threshold] __device__ (uint32_t len){
-            return len <= threshold;
+    uint32_t *nlen_d = nlen.data().get();
+    uint8_t *clen_d = clen.data().get();
+    thrust::transform(
+        thrust::make_counting_iterator<uint32_t>(0),
+        thrust::make_counting_iterator<uint32_t>(is_leaf.size()),
+        is_leaf.begin(),
+        [nlen_d, clen_d, threshold] __device__ (uint32_t i){
+            /* If less than threshold or no children => node is leaf */
+            return nlen_d[i] <= threshold || clen_d[i] == 0;
         }
     );
-
-    /* Figure out how to force is_leaf to true in finest level */
-
     /* set nlen to 0 if node is not leaf - such that it contributes 0 to prefix sum */
+    thrust::replace_if(nlen.begin(), nlen.end(), is_leaf.begin(),
+        [] __device__ (bool mask) { return !mask; }, 0);
+
+    /* set clen for leaf nodes to 0 */
+    thrust::replace_if(clen.begin(), clen.end(), is_leaf.begin(),
+        [] __device__ (bool mask) { return mask; }, 0);
 
     /* do prefix sum, this will figure out offsets in point array where each leaf points to */
 
-    /* set clen for leaf nodes to 0 */
+    
 }
 
 void ParallelQuadtree::dump_internals()
