@@ -15,20 +15,24 @@
 #include <iostream>
 #include <tuple>
 
+#include "arena_allocator.cuh"
+
+#define PROFILE
+
 class ParallelQuadtree
 {
 public:
     using Morton = uint32_t;
 
-    ParallelQuadtree(thrust::device_vector<float> &x,
-                     thrust::device_vector<float> &y,
-                     thrust::device_vector<float> &m)
-        : x(x), y(y), m(m) {
-          };
+    ParallelQuadtree(thrust::device_vector<float> x,
+                     thrust::device_vector<float> y,
+                     thrust::device_vector<float> m)
+        : x(x), y(y), m(m), internal_arena(sizeof(uint64_t) * x.size())
+        { 
+        };
 
     void build_tree();
     /* Has to stay public for lambda accessibility for thrust */
-    // Internal fields filling functions
     void compute_codes();
 
     // Helpers
@@ -57,25 +61,20 @@ public:
 
     void dump_internals();
 
-    // template <typename T>
-    // inline thrust::device_vector<uint32_t> generate_level_offset_vector(std::list<thrust::device_vector<T>>& level_vectors){
-    //     std::list<uint32_t> level_offsets;
-    // }
-
 private:
     /* Maximum of points in a single leaf */
     static constexpr size_t T = 1;
     /* Maximum height of quadtree */
     static constexpr size_t H_max = 32;
+    /* Internal arena */
+    GpuArena internal_arena;
 
     /* Input data*/
-    thrust::device_vector<float> &x;
-    thrust::device_vector<float> &y;
-    thrust::device_vector<float> &m;
+    thrust::device_vector<float> x;
+    thrust::device_vector<float> y;
+    thrust::device_vector<float> m;
 
     /*  */
     thrust::device_vector<uint64_t> code;
     thrust::device_vector<bool> is_leaf;
-    thrust::device_vector<size_t> first_child_idx;
-    thrust::device_vector<size_t> children_idx;
 };
