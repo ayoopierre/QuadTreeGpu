@@ -1,4 +1,5 @@
 #include "inc/quad_tree.cuh"
+#include "inc/arena_allocator.cuh"
 
 #include <random>
 #include <memory>
@@ -8,8 +9,8 @@ std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
 {
     std::unique_ptr<float[]> data(new float[N]);
 
-    std::random_device rd;  // seed source
-    std::mt19937 gen(rd()); // Mersenne Twister RNG
+    std::random_device rd;
+    std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dist(min, max);
 
     for (size_t i = 0; i < N; ++i)

@@ -15,9 +15,7 @@
 #include <iostream>
 #include <tuple>
 
-#include "arena_allocator.cuh"
-
-#define PROFILE
+#include "allocators.cuh"
 
 class ParallelQuadtree
 {
@@ -27,7 +25,17 @@ public:
     ParallelQuadtree(thrust::device_vector<float> x,
                      thrust::device_vector<float> y,
                      thrust::device_vector<float> m)
-        : x(x), y(y), m(m), internal_arena(sizeof(uint64_t) * x.size())
+        : x(x), y(y), m(m),
+        internal_arena(new GpuArena(sizeof(uint64_t) * x.size()))
+        { 
+        };
+
+    ParallelQuadtree(thrust::device_vector<float> x,
+                    thrust::device_vector<float> y,
+                    thrust::device_vector<float> m,
+                    GpuArena *arena)
+        : x(x), y(y), m(m),
+        internal_arena(arena)
         { 
         };
 
@@ -45,7 +53,7 @@ public:
                thrust::device_vector<uint32_t>,
                thrust::device_vector<uint8_t>>
     generate_quadrants_for_level(const thrust::device_vector<uint64_t> &code,
-                                 const thrust::device_vector<uint64_t> &below_code, int level);
+                                const thrust::device_vector<uint64_t> &below_code, int level);
 
     void trim_redundant_nodes(thrust::device_vector<uint64_t> &p_key, 
                         thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t>& clen);
@@ -63,11 +71,11 @@ public:
 
 private:
     /* Maximum of points in a single leaf */
-    static constexpr size_t T = 1;
+    static constexpr size_t T = 32;
     /* Maximum height of quadtree */
     static constexpr size_t H_max = 32;
     /* Internal arena */
-    GpuArena internal_arena;
+    GpuArena *internal_arena;
 
     /* Input data*/
     thrust::device_vector<float> x;

@@ -152,9 +152,9 @@ std::tuple<
 ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint64_t>& code,
     const thrust::device_vector<uint64_t>& below_code, int level)
 {
-    thrust::device_vector<uint8_t, ArenaAllocator<uint8_t>> quad_change_indicator(
+    thrust::device_vector<uint8_t, DeviceArenaAllocator<uint8_t>> quad_change_indicator(
         code.size(),
-        ArenaAllocator<uint8_t>(&internal_arena)
+        DeviceArenaAllocator<uint8_t>(internal_arena)
     );
     {
         /*
@@ -196,11 +196,11 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     /* Number of child points for this quadrant */
     thrust::device_vector<uint32_t> quad_point_count(num_quadrants);
     {
-        thrust::device_vector<uint32_t, ArenaAllocator<uint32_t>> quad_end_offset(
+        thrust::device_vector<uint32_t, DeviceArenaAllocator<uint32_t>> quad_end_offset(
             num_quadrants + 1,
-            ArenaAllocator<uint32_t>(&internal_arena)
+            DeviceArenaAllocator<uint32_t>(internal_arena)
         );
-        uint8_t *quad_change_indicator_d = quad_change_indicator.data();
+        uint8_t *quad_change_indicator_d = quad_change_indicator.data().get();
         uint32_t num_points = code.size();
         thrust::copy_if(
             thrust::make_counting_iterator<uint32_t>(0),
@@ -211,7 +211,7 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
             }
         );
 
-        uint32_t *quad_end_offset_d = quad_end_offset.data();
+        uint32_t *quad_end_offset_d = quad_end_offset.data().get();
         thrust::transform(
             thrust::make_counting_iterator<uint32_t>(1),
             thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
@@ -223,15 +223,15 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     }
 
     /* Can safely restore arena now */
-    internal_arena.reset();
+    internal_arena->reset();
 
     /* Number of child nodes for this quadrant */
     thrust::device_vector<uint8_t> quad_children_count(num_quadrants);
     if(level != H_max)
     {
-        thrust::device_vector<uint8_t, ArenaAllocator<uint8_t>> quadrant_change_indicator(
+        thrust::device_vector<uint8_t, DeviceArenaAllocator<uint8_t>> quadrant_change_indicator(
             below_code.size(),
-            ArenaAllocator<uint8_t>(&internal_arena)
+            DeviceArenaAllocator<uint8_t>(internal_arena)
         );
 
         const uint64_t *below_code_d = below_code.data().get(); 
@@ -249,11 +249,11 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
             }
         );
 
-        thrust::device_vector<uint32_t, ArenaAllocator<uint32_t>> quad_end_offset(
+        thrust::device_vector<uint32_t, DeviceArenaAllocator<uint32_t>> quad_end_offset(
             num_quadrants + 1,
-            ArenaAllocator<uint32_t>(&internal_arena)
+            DeviceArenaAllocator<uint32_t>(internal_arena)
         );
-        uint8_t *quadrant_change_indicator_d = quadrant_change_indicator.data();
+        uint8_t *quadrant_change_indicator_d = quadrant_change_indicator.data().get();
         uint32_t num_quads_below = below_code.size();
         thrust::copy_if(
             thrust::make_counting_iterator<uint32_t>(0),
@@ -265,7 +265,7 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
             }
         );
 
-        uint32_t *quad_end_offset_d = quad_end_offset.data();
+        uint32_t *quad_end_offset_d = quad_end_offset.data().get();
         thrust::transform(
             thrust::make_counting_iterator<uint32_t>(1),
             thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
@@ -280,7 +280,7 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     }
 
     /* Cleanup arena */
-    internal_arena.reset();
+    internal_arena->reset();
 
     return std::make_tuple<
         thrust::device_vector<uint64_t>,
@@ -338,6 +338,8 @@ void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_k
         }
     );
 
+    internal_arena->reset();
+
     auto zip_begin = thrust::make_zip_iterator(
         thrust::make_tuple(
             thrust::make_counting_iterator<uint32_t>(0),
@@ -383,7 +385,8 @@ void ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t>& p_k
 void ParallelQuadtree::fill_tree(thrust::device_vector<uint64_t> &p_key, 
 thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t>& clen)
 {
-    thrust::device_vector<uint8_t> is_leaf(p_key.size());
+    thrust::device_vector<uint8_t, DeviceArenaAllocator<uint8_t>>
+        s_leaf(p_key.size(), DeviceArenaAllocator<uint8_t>(internal_arena));
     size_t threshold = T;
     uint32_t *nlen_d = nlen.data().get();
     uint8_t *clen_d = clen.data().get();
@@ -406,7 +409,7 @@ thrust::device_vector<uint32_t>& nlen, thrust::device_vector<uint8_t>& clen)
 
     /* do prefix sum, this will figure out offsets in point array where each leaf points to */
 
-    
+    internal_arena->reset();
 }
 
 void ParallelQuadtree::dump_internals()
