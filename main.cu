@@ -1,4 +1,5 @@
 #include "inc/quad_tree.cuh"
+#include "inc/node.cuh"
 
 #include <random>
 #include <memory>
@@ -20,10 +21,12 @@ std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
     return data;
 }
 
-constexpr size_t N = 1000000;
+constexpr size_t N = 10;
 
 int main(void)
 {
+    GpuArena arena(8UL * 1024UL * 1024UL);
+
     try
     {
         auto host_buffer_x = generate_random_floats(N, 0.0f, 1.0f);
@@ -33,7 +36,7 @@ int main(void)
         thrust::device_vector<float> y(host_buffer_y.get(), host_buffer_y.get() + N);
         thrust::device_vector<float> m(host_buffer_z.get(), host_buffer_z.get() + N);
 
-        ParallelQuadtree p(std::move(x), std::move(y), std::move(m));
+        ParallelQuadtree p(std::move(x), std::move(y), std::move(m), &arena);
 
         auto clock = std::chrono::high_resolution_clock();
         auto beg = clock.now();

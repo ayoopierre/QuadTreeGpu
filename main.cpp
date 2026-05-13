@@ -1,9 +1,10 @@
 #include "inc/quad_tree.cuh"
-#include "inc/arena_allocator.cuh"
 
 #include <random>
 #include <memory>
 #include <chrono>
+
+#include "inc/node.cuh"
 
 std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
 {
@@ -45,6 +46,5 @@ int main(void)
         cudaDeviceSynchronize();
         cudaDeviceReset();
     }
-
     return 0;
 }
