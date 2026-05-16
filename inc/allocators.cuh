@@ -103,6 +103,11 @@ private:
     size_t offset;
 };
 
+/* 
+Proof of concept areana allocator - managed to get ~20ms for 1 mln points:
+- No arena version 1 mln points - ~100ms
+- Arena version on some intermediate vectors 1 mln points - ~81ms
+*/
 template <typename T>
 class DeviceArenaAllocator
 {
