@@ -4,6 +4,7 @@
 #include <thrust/reduce.h>
 #include <thrust/copy.h>
 #include <thrust/sort.h>
+#include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/functional.h>
 #include <thrust/unique.h>
@@ -45,12 +46,23 @@ public:
 
     // Helpers
     /* TODO: remove refrence and do explicit move / lowkey fine since const ref */
-    std::tuple<thrust::device_vector<uint64_t>,
+    /* Produce qudrants for level and COM summary */
+    std::tuple<
+        thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
-        thrust::device_vector<uint8_t>>
-    generate_quadrants_for_level(const thrust::device_vector<uint64_t> &code,
-                                const thrust::device_vector<uint64_t> &below_code, int level);
+        thrust::device_vector<uint8_t>,
+        thrust::device_vector<float>,
+        thrust::device_vector<float>> 
+    generate_quadrants_for_level(
+        const thrust::device_vector<uint64_t>& code,
+        const thrust::device_vector<uint64_t>& prev_code,
+        const thrust::device_vector<uint32_t>& prev_nlen,
+        const thrust::device_vector<float>& x_com,
+        const thrust::device_vector<float>& y_com,
+        int level
+    );
 
+    /* Remove redundant nodes  */
     std::tuple<thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint8_t>>
@@ -65,6 +77,8 @@ public:
     fill_tree(thrust::device_vector<uint64_t> p_key, 
                 thrust::device_vector<uint32_t> nlen,
                 thrust::device_vector<uint8_t> clen);
+
+    /* Internal utilities */
 
 private:
     /* Maximum of points in a single leaf */

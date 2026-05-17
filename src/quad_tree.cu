@@ -104,45 +104,57 @@ void ParallelQuadtree::build_tree()
     thrust::device_vector<uint64_t> p_key;
     thrust::device_vector<uint32_t> nlen;
     thrust::device_vector<uint8_t> clen;
+    thrust::device_vector<float> x_com;
+    thrust::device_vector<float> y_com;
     {
-        std::list<thrust::device_vector<uint8_t>> node_children_list;
-        std::list<thrust::device_vector<uint32_t>> node_points_list;
-        std::list<thrust::device_vector<uint64_t>> node_code_list;
+        std::list<thrust::device_vector<uint8_t>> level_children_list;
+        std::list<thrust::device_vector<uint32_t>> level_points_list;
+        std::list<thrust::device_vector<uint64_t>> level_code_list;
+        std::list<thrust::device_vector<float>> level_x_com_list;
+        std::list<thrust::device_vector<float>> level_y_com_list;
 
         for (int i = H_max; i >= 0; i--)
         {
-            thrust::device_vector<uint8_t> node_children;
-            thrust::device_vector<uint32_t> node_points;
-            thrust::device_vector<uint64_t> node_codes;
+            thrust::device_vector<uint8_t> level_children;
+            thrust::device_vector<uint32_t> level_points;
+            thrust::device_vector<uint64_t> level_codes;
+            thrust::device_vector<float> level_x_com;
+            thrust::device_vector<float> level_y_com;
 
-            const thrust::device_vector<uint64_t> *prev_codes = node_code_list.empty() ? nullptr : &node_code_list.front();
+            const thrust::device_vector<uint64_t> *prev_codes = level_code_list.empty() ? nullptr : &level_code_list.front();
+            const thrust::device_vector<uint32_t> *prev_nlen = level_points_list.empty() ? nullptr : &level_points_list.front();
+            const thrust::device_vector<float> *prev_x_com = level_x_com_list.empty() ? nullptr : &level_x_com_list.front();
+            const thrust::device_vector<float> *prev_y_com = level_y_com_list.empty() ? nullptr : &level_y_com_list.front();
 
-            std::tie(node_codes, node_points, node_children) =
-                generate_quadrants_for_level(code, prev_codes ? *prev_codes : thrust::device_vector<uint64_t>{}, i);
+            std::tie(level_codes, level_points, level_children, level_x_com, level_y_com) =
+                generate_quadrants_for_level(
+                    code,
+                    prev_codes ? *prev_codes : thrust::device_vector<uint64_t>{},
+                    prev_nlen ? *prev_nlen : thrust::device_vector<uint32_t>{},
+                    prev_x_com ? *prev_x_com : thrust::device_vector<float>{},
+                    prev_y_com ? *prev_y_com : thrust::device_vector<float>{},
+                    i
+                );
 
-            node_children_list.push_front(std::move(node_children));
-            node_points_list.push_front(std::move(node_points));
-            node_code_list.push_front(std::move(node_codes));
+            level_children_list.push_front(std::move(level_children));
+            level_points_list.push_front(std::move(level_points));
+            level_code_list.push_front(std::move(level_codes));
+            level_x_com_list.push_front(std::move(level_x_com));
+            level_y_com_list.push_front(std::move(level_y_com));
         }
 
         printf("Compress\n");
-        p_key = compress_vector<uint64_t>(node_code_list);
-        nlen = compress_vector<uint32_t>(node_points_list);
-        clen = compress_vector<uint8_t>(node_children_list);
-        // dump_device_vector<uint32_t>(nlen, "NUMBER OF POINTS UNDER QUAD: ");
+        p_key = compress_vector<uint64_t>(level_code_list);
+        nlen = compress_vector<uint32_t>(level_points_list);
+        clen = compress_vector<uint8_t>(level_children_list);
+        x_com = compress_vector<float>(level_x_com_list);
+        y_com = compress_vector<float>(level_y_com_list);
     }
 
     printf("Trim\n");
     std::tie(p_key, nlen, clen) = trim_redundant_nodes(std::move(p_key), std::move(nlen), std::move(clen));
-    dump_device_vector(p_key, "KEYS: ");
-    dump_device_vector(clen, "CLEN: ");
-    dump_device_vector(nlen, "NLEN: ");
     printf("Fill tree\n");
     std::tie(key, f_pos, length, is_leaf) = fill_tree(std::move(p_key), std::move(nlen), std::move(clen));
-    dump_device_vector(key, "KEYS");
-    dump_device_vector(f_pos, "F_POS");
-    dump_device_vector(length, "LENGHT");
-    dump_device_vector(is_leaf, "IS_LEAF");
     printf("Done\n");
 
     show_tree(std::move(key), std::move(is_leaf), std::move(f_pos), std::move(length));
@@ -196,9 +208,16 @@ void ParallelQuadtree::compute_codes()
 std::tuple<
     thrust::device_vector<uint64_t>,
     thrust::device_vector<uint32_t>,
-    thrust::device_vector<uint8_t>> 
-ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint64_t>& code,
-    const thrust::device_vector<uint64_t>& below_code, int level)
+    thrust::device_vector<uint8_t>,
+    thrust::device_vector<float>,
+    thrust::device_vector<float>> 
+ParallelQuadtree::generate_quadrants_for_level(
+    const thrust::device_vector<uint64_t>& code,
+    const thrust::device_vector<uint64_t>& prev_code,
+    const thrust::device_vector<uint32_t>& prev_nlen,
+    const thrust::device_vector<float>& prev_x_com,
+    const thrust::device_vector<float>& prev_y_com,
+    int level)
 {
     thrust::device_vector<uint8_t, DeviceArenaAllocator<uint8_t>> quad_change_indicator(
         code.size(),
@@ -242,33 +261,31 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     );
 
     /* Number of child points for this quadrant */
-    thrust::device_vector<uint32_t> quad_point_count(num_quadrants);
-    {
-        thrust::device_vector<uint32_t, DeviceArenaAllocator<uint32_t>> quad_end_offset(
-            num_quadrants + 1,
-            DeviceArenaAllocator<uint32_t>(internal_arena)
-        );
-        uint8_t *quad_change_indicator_d = quad_change_indicator.data().get();
-        uint32_t num_points = code.size();
-        thrust::copy_if(
-            thrust::make_counting_iterator<uint32_t>(0),
-            thrust::make_counting_iterator<uint32_t>(num_points + 1),
-            quad_end_offset.begin(),
-            [num_points, quad_change_indicator_d] __device__ __host__ (uint32_t i){ 
-                return (i == num_points) ? true : quad_change_indicator_d[i]; 
-            }
-        );
+    thrust::device_vector<uint32_t> nlen(num_quadrants);
+    thrust::device_vector<uint32_t, DeviceArenaAllocator<uint32_t>> quad_end_offset(
+        num_quadrants + 1,
+        DeviceArenaAllocator<uint32_t>(internal_arena)
+    );
+    uint8_t *quad_change_indicator_d = quad_change_indicator.data().get();
+    uint32_t num_points = code.size();
+    thrust::copy_if(
+        thrust::make_counting_iterator<uint32_t>(0),
+        thrust::make_counting_iterator<uint32_t>(num_points + 1),
+        quad_end_offset.begin(),
+        [num_points, quad_change_indicator_d] __device__ __host__ (uint32_t i){ 
+            return (i == num_points) ? true : quad_change_indicator_d[i]; 
+        }
+    );
 
-        uint32_t *quad_end_offset_d = quad_end_offset.data().get();
-        thrust::transform(
-            thrust::make_counting_iterator<uint32_t>(1),
-            thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
-            quad_point_count.begin(),
-            [quad_end_offset_d] __device__ __host__ (uint32_t i){
-                return quad_end_offset_d[i] - quad_end_offset_d[i - 1];
-            }
-        );
-    }
+    uint32_t *quad_end_offset_d = quad_end_offset.data().get();
+    thrust::transform(
+        thrust::make_counting_iterator<uint32_t>(1),
+        thrust::make_counting_iterator<uint32_t>(num_quadrants + 1),
+        nlen.begin(),
+        [quad_end_offset_d] __device__ __host__ (uint32_t i){
+            return quad_end_offset_d[i] - quad_end_offset_d[i - 1];
+        }
+    );
 
     /* Can safely restore arena now */
     internal_arena->reset();
@@ -278,20 +295,20 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     if(level != H_max)
     {
         thrust::device_vector<uint8_t, DeviceArenaAllocator<uint8_t>> quadrant_change_indicator(
-            below_code.size(),
+            prev_code.size(),
             DeviceArenaAllocator<uint8_t>(internal_arena)
         );
 
-        const uint64_t *below_code_d = below_code.data().get(); 
+        const uint64_t *prev_code_d = prev_code.data().get(); 
         thrust::transform(
             thrust::make_counting_iterator<uint32_t>(0),
-            thrust::make_counting_iterator<uint32_t>(below_code.size()),
+            thrust::make_counting_iterator<uint32_t>(prev_code.size()),
             quadrant_change_indicator.begin(),
-            [below_code_d, level] __device__ __host__ (uint32_t i){
+            [prev_code_d, level] __device__ __host__ (uint32_t i){
                 if(i == 0) return true;
 
-                uint64_t a = below_code_d[i - 1] >> (64 - 2 * level);
-                uint64_t b = below_code_d[i] >> (64 - 2 * level);
+                uint64_t a = prev_code_d[i - 1] >> (64 - 2 * level);
+                uint64_t b = prev_code_d[i] >> (64 - 2 * level);
 
                 return a != b;
             }
@@ -302,7 +319,7 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
             DeviceArenaAllocator<uint32_t>(internal_arena)
         );
         uint8_t *quadrant_change_indicator_d = quadrant_change_indicator.data().get();
-        uint32_t num_quads_below = below_code.size();
+        uint32_t num_quads_below = prev_code.size();
         thrust::copy_if(
             thrust::make_counting_iterator<uint32_t>(0),
             thrust::make_counting_iterator<uint32_t>(num_quads_below + 1),
@@ -330,14 +347,61 @@ ParallelQuadtree::generate_quadrants_for_level(const thrust::device_vector<uint6
     /* Cleanup arena */
     internal_arena->reset();
 
+    /* Find X center of mass */
+    thrust::device_vector<float> x_com(num_quadrants);
+    if(level != H_max){
+    //     const uint32_t *prev_nlen_d = prev_nlen.data().get();
+    //     const float *prev_x_com_d = prev_x_com.data().get();
+    //     /* !!! If the lambda is defined in argument thrust fails to evaluate iterator types properly !!! */
+    //     auto func = [prev_nlen_d, prev_x_com_d] (uint32_t i) { return (float)prev_nlen_d[i] * prev_x_com_d[i]; };
+    //     auto begin = thrust::make_transform_iterator(
+    //         thrust::make_counting_iterator<uint32_t>(0), func);
+
+    //     auto end = thrust::make_transform_iterator(
+    //         thrust::make_counting_iterator<uint32_t>(prev_x_com.size()), func);
+
+    //     thrust::device_vector<float> x_scan(prev_x_com.size());
+    //     thrust::inclusive_scan(begin, end, x_scan.begin(),
+    //         [] __device__ __host__ (float a, float b) { return a + b; });
+    }
+    else{
+        thrust::device_vector<float> x_scan(x.size());
+
+        thrust::inclusive_scan(x.begin(), x.end(), x_scan.begin(),
+            [] __device__ __host__ (float a, float b) { return a + b; });
+        
+        float *x_scan_d = x_scan.data().get();
+        uint32_t *nlen_d = nlen.data().get();
+        thrust::transform(
+            thrust::make_counting_iterator<uint32_t>(0),
+            thrust::make_counting_iterator<uint32_t>(num_quadrants),
+            x_com.begin(),
+            [x_scan_d, quad_end_offset_d, nlen_d] __device__ __host__ (uint32_t i){
+                /* i-1 is end of previous quadrant and should be removed */
+                /* Mass const. we can use nlen - if not same logic to compute mass */
+                return (i == 0) ?
+                    x_scan_d[i] / (float)nlen_d[i] : 
+                    (x_scan_d[i] - x_scan_d[i - 1]) / (float)nlen_d[i];
+            }
+        );
+    }
+
+    /* Find Y center of mass */
+    thrust::device_vector<float> y_com(num_quadrants);
+
+
     return std::make_tuple<
         thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
-        thrust::device_vector<uint8_t>>
+        thrust::device_vector<uint8_t>,
+        thrust::device_vector<float>,
+        thrust::device_vector<float>>
     (
         std::move(quad_codes),
-        std::move(quad_point_count),
-        std::move(quad_children_count)
+        std::move(nlen),
+        std::move(quad_children_count),
+        std::move(x_com),
+        std::move(y_com)
     );
 }
 
