@@ -12,7 +12,7 @@
 static void show_tree(thrust::device_vector<uint64_t> key, thrust::device_vector<bool> is_leaf,
     thrust::device_vector<uint32_t> f_pos, thrust::device_vector<uint32_t> length)
 {
-    if(key.size() > 100){
+    if(key.size() > 200){
         printf("Hell nah aint printing that\n");
         return;
     }
@@ -142,7 +142,6 @@ void ParallelQuadtree::build_tree()
             level_y_com_list.push_front(std::move(level_y_com));
         }
 
-        printf("Compress\n");
         p_key = compress_vector<uint64_t>(level_code_list);
         nlen = compress_vector<uint32_t>(level_points_list);
         clen = compress_vector<uint8_t>(level_children_list);
@@ -150,11 +149,19 @@ void ParallelQuadtree::build_tree()
         y_com = compress_vector<float>(level_y_com_list);
     }
 
-    printf("Trim\n");
-    std::tie(p_key, nlen, clen) = trim_redundant_nodes(std::move(p_key), std::move(nlen), std::move(clen));
-    printf("Fill tree\n");
-    std::tie(key, f_pos, length, is_leaf) = fill_tree(std::move(p_key), std::move(nlen), std::move(clen));
-    printf("Done\n");
+    std::tie(p_key, nlen, clen, x_com, y_com) = trim_redundant_nodes(
+        std::move(p_key), 
+        std::move(nlen), 
+        std::move(clen),
+        std::move(x_com),
+        std::move(y_com)
+    );
+
+    std::tie(key, f_pos, length, is_leaf) = fill_tree(
+        std::move(p_key),
+        std::move(nlen),
+        std::move(clen)
+    );
 
     show_tree(std::move(key), std::move(is_leaf), std::move(f_pos), std::move(length));
 }
@@ -329,13 +336,18 @@ ParallelQuadtree::generate_quadrants_for_level(
 
 std::tuple<thrust::device_vector<uint64_t>,
     thrust::device_vector<uint32_t>,
-    thrust::device_vector<uint8_t>>
-ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t> p_key,
-    thrust::device_vector<uint32_t> nlen, thrust::device_vector<uint8_t> clen)
+    thrust::device_vector<uint8_t>,
+    thrust::device_vector<float>,
+    thrust::device_vector<float>>
+ParallelQuadtree::trim_redundant_nodes(
+    thrust::device_vector<uint64_t> p_key,
+    thrust::device_vector<uint32_t> nlen,
+    thrust::device_vector<uint8_t> clen,
+    thrust::device_vector<float> x_com,
+    thrust::device_vector<float> y_com)
 {
     thrust::device_vector<uint32_t> node_child_start(clen.size()); 
     /* Value initialization is important - by default exclusive_scan happens on uint8_t and it overflows */
-    printf("Excl san\n");
     auto cast = [] __device__ __host__ (uint8_t v) { return static_cast<uint32_t>(v); };
     thrust::exclusive_scan(
         thrust::make_transform_iterator(clen.begin(), cast),
@@ -371,14 +383,14 @@ ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t> p_key,
         }
     );
 
-    internal_arena->reset();
-
     auto zip_begin = thrust::make_zip_iterator(
         thrust::make_tuple(
             thrust::make_counting_iterator<uint32_t>(0),
             p_key.begin(),
             nlen.begin(),
-            clen.begin()
+            clen.begin(),
+            x_com.begin(),
+            y_com.begin()
         )
     );
 
@@ -387,16 +399,19 @@ ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t> p_key,
             thrust::make_counting_iterator<uint32_t>(p_key.size()),
             p_key.end(),
             nlen.end(),
-            clen.end()
+            clen.end(),
+            x_com.begin(),
+            y_com.begin()
         )
     );  
 
-    printf("Redudant node trim\n");
     uint32_t *parent_point_count_d = parent_point_count.data().get();
     uint32_t threshold = T;
     auto end = thrust::remove_if(
         zip_begin, zip_end,
-        [parent_point_count_d, threshold] __device__ __host__ (thrust::tuple<uint32_t, uint64_t, uint32_t, uint8_t> t){
+        [parent_point_count_d, threshold] __device__ __host__ (
+            thrust::tuple<uint32_t, uint64_t, uint32_t, uint8_t, float, float> t
+        ){
             uint32_t i = thrust::get<0>(t);
             /* Remove if parent already is leaf, if this is root skip */
             return (parent_point_count_d[i] <= threshold) && i != 0;
@@ -408,18 +423,28 @@ ParallelQuadtree::trim_redundant_nodes(thrust::device_vector<uint64_t> p_key,
     p_key.erase(thrust::get<1>(end_tuple), p_key.end());
     nlen.erase(thrust::get<2>(end_tuple), nlen.end());
     clen.erase(thrust::get<3>(end_tuple), clen.end());
+    x_com.erase(thrust::get<4>(end_tuple), x_com.end());
+    y_com.erase(thrust::get<5>(end_tuple), y_com.end());
 
-    printf("Shrink\n");
     /* Idk this might copy - not sure if correct to do so */
     p_key.shrink_to_fit();
     nlen.shrink_to_fit();
     clen.shrink_to_fit();
+    x_com.shrink_to_fit();
+    y_com.shrink_to_fit();
 
-    return std::make_tuple<thrust::device_vector<uint64_t>,
+    return std::make_tuple<
+        thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
-        thrust::device_vector<uint8_t>>
+        thrust::device_vector<uint8_t>,
+        thrust::device_vector<float>,
+        thrust::device_vector<float>>
     (
-        std::move(p_key), std::move(nlen), std::move(clen)        
+        std::move(p_key),
+        std::move(nlen),
+        std::move(clen),
+        std::move(x_com),
+        std::move(y_com)        
     );
 }
 
@@ -445,7 +470,6 @@ ParallelQuadtree::fill_tree(thrust::device_vector<uint64_t> p_key,
     );
 
     uint32_t leaf_number = thrust::reduce(is_leaf.begin(), is_leaf.end(), uint32_t{0});
-    printf("LEAF NUMBER: %u\n", leaf_number);
 
     /* set nlen to 0 if node is not leaf - such that it contributes 0 to prefix sum */
     thrust::replace_if(nlen.begin(), nlen.end(), is_leaf.begin(),
@@ -454,10 +478,6 @@ ParallelQuadtree::fill_tree(thrust::device_vector<uint64_t> p_key,
     /* set clen for leaf nodes to 0 - such that it contributes 0 to prefix sum */
     thrust::replace_if(clen.begin(), clen.end(), is_leaf.begin(),
         [] __device__ __host__ (uint8_t mask) { return mask; }, 0);
-
-    dump_device_vector(p_key, "KEYS");
-    dump_device_vector(clen, "CLEN");
-    dump_device_vector(nlen, "NLEN");
 
     thrust::device_vector<uint32_t> ppos(is_leaf.size()), cpos(is_leaf.size()), f_pos(is_leaf.size());
 

@@ -21,7 +21,7 @@ std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
     return data;
 }
 
-constexpr size_t N = 10;
+constexpr size_t N = 100;
 
 int main(void)
 {
@@ -49,8 +49,6 @@ int main(void)
     {
         printf("It seems that we throw and arena was to small\n");
     }
-
-    std::cout << "All done\n";
 
     return 0;
 }

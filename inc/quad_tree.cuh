@@ -63,12 +63,19 @@ public:
     );
 
     /* Remove redundant nodes  */
-    std::tuple<thrust::device_vector<uint64_t>,
+    std::tuple<
+        thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
-        thrust::device_vector<uint8_t>>
-    trim_redundant_nodes(thrust::device_vector<uint64_t> p_key, 
-                        thrust::device_vector<uint32_t> nlen,
-                        thrust::device_vector<uint8_t> clen);
+        thrust::device_vector<uint8_t>,
+        thrust::device_vector<float>,
+        thrust::device_vector<float>>
+    trim_redundant_nodes(
+        thrust::device_vector<uint64_t> p_key, 
+        thrust::device_vector<uint32_t> nlen,
+        thrust::device_vector<uint8_t> clen,
+        thrust::device_vector<float> x_com,
+        thrust::device_vector<float> y_com
+    );
     
     std::tuple<thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
