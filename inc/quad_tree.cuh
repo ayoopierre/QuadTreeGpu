@@ -6,6 +6,7 @@
 #include <thrust/sort.h>
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
+#include <thrust/iterator/discard_iterator.h>
 #include <thrust/functional.h>
 #include <thrust/unique.h>
 #include <thrust/gather.h>
@@ -54,7 +55,6 @@ public:
         thrust::device_vector<float>,
         thrust::device_vector<float>> 
     generate_quadrants_for_level(
-        const thrust::device_vector<uint64_t>& code,
         const thrust::device_vector<uint64_t>& prev_code,
         const thrust::device_vector<uint32_t>& prev_nlen,
         const thrust::device_vector<float>& x_com,

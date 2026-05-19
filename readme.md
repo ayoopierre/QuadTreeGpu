@@ -43,3 +43,6 @@ auto begin = thrust::make_transform_iterator(
 
 # Summary of level if we have prev
 We have nlen of each child as well as COM of each child. Simply do weighted average of those.
+
+# TODO
+Change quadrant generation to rely more on reduce_by_key
