@@ -79,23 +79,34 @@ public:
         thrust::device_vector<float> x_com,
         thrust::device_vector<float> y_com
     );
+
+    std::tuple<
+        thrust::device_vector<uint32_t>,
+        thrust::device_vector<float>,
+        thrust::device_vector<float>>
+    normalize_center_of_mass(
+        thrust::device_vector<uint32_t> nlen,
+        thrust::device_vector<float> x_com,
+        thrust::device_vector<float> y_com
+    );
     
     std::tuple<thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint8_t>>
-    fill_tree(thrust::device_vector<uint64_t> p_key, 
-                thrust::device_vector<uint32_t> nlen,
-                thrust::device_vector<uint32_t> start,
-                thrust::device_vector<uint8_t> clen);
+    fill_tree(
+        thrust::device_vector<uint64_t> p_key, 
+        thrust::device_vector<uint32_t> nlen,
+        thrust::device_vector<uint32_t> start,
+        thrust::device_vector<uint8_t> clen);
 
     /* Internal utilities */
 
 private:
     /* Maximum of points in a single leaf */
-    static constexpr size_t T = 1;
+    static constexpr size_t T = 32;
     /* Maximum height of quadtree */
-    static constexpr size_t H_max = 32;
+    static constexpr size_t H_max = 8;
     /* Internal arena */
     GpuArena *internal_arena;
 

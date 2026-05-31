@@ -21,7 +21,7 @@ std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
     return data;
 }
 
-constexpr size_t N = 10;
+constexpr size_t N = 1000000;
 
 int main(void)
 {
