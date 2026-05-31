@@ -21,23 +21,25 @@ std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
     return data;
 }
 
-constexpr size_t N = 100;
+constexpr size_t N = 10;
 
 int main(void)
 {
-    GpuArena arena(8UL * 1024UL * 1024UL);
-
     try
     {
+        printf("Allocate points\n");
         auto host_buffer_x = generate_random_floats(N, 0.0f, 1.0f);
         auto host_buffer_y = generate_random_floats(N, 0.0f, 1.0f);
         auto host_buffer_z = generate_random_floats(N, 0.0f, 1.0f);
+        printf("Create GPU vectors\n");
         thrust::device_vector<float> x(host_buffer_x.get(), host_buffer_x.get() + N);
         thrust::device_vector<float> y(host_buffer_y.get(), host_buffer_y.get() + N);
         thrust::device_vector<float> m(host_buffer_z.get(), host_buffer_z.get() + N);
 
-        ParallelQuadtree p(std::move(x), std::move(y), std::move(m), &arena);
+        printf("Create class\n");
+        ParallelQuadtree p(std::move(x), std::move(y), std::move(m));
 
+        printf("Build tree\n");
         auto clock = std::chrono::high_resolution_clock();
         auto beg = clock.now();
         p.build_tree();

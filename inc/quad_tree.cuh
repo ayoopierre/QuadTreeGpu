@@ -27,8 +27,7 @@ public:
     ParallelQuadtree(thrust::device_vector<float> x,
                      thrust::device_vector<float> y,
                      thrust::device_vector<float> m)
-        : x(x), y(y), m(m),
-        internal_arena(new GpuArena(sizeof(uint64_t) * x.size()))
+        : x(x), y(y), m(m)
         { 
         };
 
@@ -51,12 +50,14 @@ public:
     std::tuple<
         thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
+        thrust::device_vector<uint32_t>,
         thrust::device_vector<uint8_t>,
         thrust::device_vector<float>,
         thrust::device_vector<float>> 
     generate_quadrants_for_level(
         const thrust::device_vector<uint64_t>& prev_code,
         const thrust::device_vector<uint32_t>& prev_nlen,
+        const thrust::device_vector<uint32_t>& prev_start,
         const thrust::device_vector<float>& x_com,
         const thrust::device_vector<float>& y_com,
         int level
@@ -66,12 +67,14 @@ public:
     std::tuple<
         thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
+        thrust::device_vector<uint32_t>,
         thrust::device_vector<uint8_t>,
         thrust::device_vector<float>,
         thrust::device_vector<float>>
     trim_redundant_nodes(
         thrust::device_vector<uint64_t> p_key, 
         thrust::device_vector<uint32_t> nlen,
+        thrust::device_vector<uint32_t> start,
         thrust::device_vector<uint8_t> clen,
         thrust::device_vector<float> x_com,
         thrust::device_vector<float> y_com
@@ -83,6 +86,7 @@ public:
         thrust::device_vector<uint8_t>>
     fill_tree(thrust::device_vector<uint64_t> p_key, 
                 thrust::device_vector<uint32_t> nlen,
+                thrust::device_vector<uint32_t> start,
                 thrust::device_vector<uint8_t> clen);
 
     /* Internal utilities */
