@@ -1,4 +1,4 @@
-#include "quad_tree.cuh"
+#include "quad_tree_builder.cuh"
 
 #include <list>
 #include <string>
@@ -100,7 +100,13 @@ static void dump_device_vector(const thrust::device_vector<T> &v, const char *pr
     std::cout << std::endl;
 }
 
-void ParallelQuadtree::build_tree()
+std::tuple<
+    thrust::device_vector<uint32_t>,
+    thrust::device_vector<uint32_t>,
+    thrust::device_vector<uint8_t>,
+    thrust::device_vector<float>,
+    thrust::device_vector<float>>
+ParallelQuadtreeBuilder::build_tree()
 {
     compute_codes();
 
@@ -184,20 +190,34 @@ void ParallelQuadtree::build_tree()
         std::move(clen)
     );
 
-    show_tree(
-        std::move(key), std::move(is_leaf),
-        std::move(f_pos), std::move(length),
-        std::move(x), std::move(y),
-        std::move(x_com), std::move(y_com)
-    );
+    return {
+        std::move(f_pos), 
+        std::move(length),
+        std::move(is_leaf),
+        std::move(x_com),
+        std::move(y_com)
+    };
 }
+
+std::tuple<
+    thrust::device_vector<float>,
+    thrust::device_vector<float>,
+    thrust::device_vector<float>>
+ParallelQuadtreeBuilder::retrive_arguments(){
+    return {
+        std::move(x),
+        std::move(y),
+        std::move(m)
+    };
+}
+
 /*
     Could be better:
         1. Find min/max for x and y
         2. In single transform step
            normalize and compute code
 */
-void ParallelQuadtree::compute_codes()
+void ParallelQuadtreeBuilder::compute_codes()
 {
     auto x_min_max = thrust::minmax_element(x.begin(), x.end());
     auto y_min_max = thrust::minmax_element(y.begin(), y.end());
@@ -246,7 +266,7 @@ std::tuple<
     thrust::device_vector<uint8_t>,
     thrust::device_vector<float>,
     thrust::device_vector<float>> 
-ParallelQuadtree::generate_quadrants_for_level(
+ParallelQuadtreeBuilder::generate_quadrants_for_level(
     const thrust::device_vector<uint64_t>& prev_code,
     const thrust::device_vector<uint32_t>& prev_nlen,
     const thrust::device_vector<uint32_t>& prev_start,
@@ -376,7 +396,7 @@ std::tuple<thrust::device_vector<uint64_t>,
     thrust::device_vector<uint8_t>,
     thrust::device_vector<float>,
     thrust::device_vector<float>>
-ParallelQuadtree::trim_redundant_nodes(
+ParallelQuadtreeBuilder::trim_redundant_nodes(
     thrust::device_vector<uint64_t> p_key,
     thrust::device_vector<uint32_t> nlen,
     thrust::device_vector<uint32_t> start,
@@ -496,11 +516,12 @@ ParallelQuadtree::trim_redundant_nodes(
     );
 }
 
+/* Here we should also cache min/max and expand back to global coos */
 std::tuple<
     thrust::device_vector<uint32_t>,
     thrust::device_vector<float>,
     thrust::device_vector<float>>
-ParallelQuadtree::normalize_center_of_mass(
+ParallelQuadtreeBuilder::normalize_center_of_mass(
     thrust::device_vector<uint32_t> nlen,
     thrust::device_vector<float> x_com,
     thrust::device_vector<float> y_com)
@@ -532,7 +553,7 @@ std::tuple<thrust::device_vector<uint64_t>,
     thrust::device_vector<uint32_t>,
     thrust::device_vector<uint32_t>,
     thrust::device_vector<uint8_t>>
-ParallelQuadtree::fill_tree(
+ParallelQuadtreeBuilder::fill_tree(
     thrust::device_vector<uint64_t> p_key, 
     thrust::device_vector<uint32_t> nlen,
     thrust::device_vector<uint32_t> start,

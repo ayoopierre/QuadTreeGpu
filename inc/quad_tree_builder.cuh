@@ -19,28 +19,31 @@
 
 #include "allocators.cuh"
 
-class ParallelQuadtree
+class ParallelQuadtreeBuilder
 {
 public:
     using Morton = uint32_t;
 
-    ParallelQuadtree(thrust::device_vector<float> x,
+    ParallelQuadtreeBuilder(thrust::device_vector<float> x,
                      thrust::device_vector<float> y,
                      thrust::device_vector<float> m)
         : x(x), y(y), m(m)
         { 
         };
 
-    ParallelQuadtree(thrust::device_vector<float> x,
-                    thrust::device_vector<float> y,
-                    thrust::device_vector<float> m,
-                    GpuArena *arena)
-        : x(x), y(y), m(m),
-        internal_arena(arena)
-        { 
-        };
+    
+    std::tuple<
+        thrust::device_vector<uint32_t>,
+        thrust::device_vector<uint32_t>,
+        thrust::device_vector<uint8_t>,
+        thrust::device_vector<float>,
+        thrust::device_vector<float>> build_tree();
 
-    void build_tree();
+    std::tuple<
+        thrust::device_vector<float>,
+        thrust::device_vector<float>,
+        thrust::device_vector<float>> retrive_arguments();
+
     /* Has to stay public for lambda accessibility for thrust */
     void compute_codes();
 
@@ -100,15 +103,13 @@ public:
         thrust::device_vector<uint32_t> start,
         thrust::device_vector<uint8_t> clen);
 
-    /* Internal utilities */
+    static constexpr size_t get_max_height() { return H_max; };
 
 private:
     /* Maximum of points in a single leaf */
     static constexpr size_t T = 32;
     /* Maximum height of quadtree */
     static constexpr size_t H_max = 8;
-    /* Internal arena */
-    GpuArena *internal_arena;
 
     /* Input data*/
     thrust::device_vector<float> x;

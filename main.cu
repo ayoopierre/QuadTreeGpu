@@ -1,4 +1,4 @@
-#include "inc/quad_tree.cuh"
+#include "inc/quad_tree_builder.cuh"
 #include "inc/node.cuh"
 
 #include <random>
@@ -37,7 +37,7 @@ int main(void)
         thrust::device_vector<float> m(host_buffer_z.get(), host_buffer_z.get() + N);
 
         printf("Create class\n");
-        ParallelQuadtree p(std::move(x), std::move(y), std::move(m));
+        ParallelQuadtreeBuilder p(std::move(x), std::move(y), std::move(m));
 
         printf("Build tree\n");
         auto clock = std::chrono::high_resolution_clock();

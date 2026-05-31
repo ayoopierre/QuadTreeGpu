@@ -37,7 +37,7 @@ int main(void)
         thrust::device_vector<float> y(host_buffer_y.get(), host_buffer_y.get() + N);
         thrust::device_vector<float> m(host_buffer_z.get(), host_buffer_z.get() + N);
 
-        ParallelQuadtree p(std::move(x), std::move(y), std::move(m));
+        ParallelQuadtreeBuilder p(std::move(x), std::move(y), std::move(m));
         auto clock = std::chrono::high_resolution_clock();
         auto beg = clock.now();
         p.build_tree();
