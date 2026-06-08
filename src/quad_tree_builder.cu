@@ -183,11 +183,24 @@ ParallelQuadtreeBuilder::build_tree()
         std::move(y_com)
     );
 
+    normalize_source_data();
+
     std::tie(key, f_pos, length, is_leaf) = fill_tree(
         std::move(p_key),
         std::move(nlen),
         std::move(start),
         std::move(clen)
+    );
+
+    show_tree(
+        std::move(key),
+        std::move(is_leaf),
+        std::move(f_pos),
+        std::move(length),
+        std::move(x),
+        std::move(y),
+        std::move(x_com),
+        std::move(y_com)
     );
 
     return {
@@ -222,25 +235,27 @@ void ParallelQuadtreeBuilder::compute_codes()
     auto x_min_max = thrust::minmax_element(x.begin(), x.end());
     auto y_min_max = thrust::minmax_element(y.begin(), y.end());
 
-    thrust::device_vector<float> x_norm(x.size());
-    thrust::device_vector<float> y_norm(y.size());
+    x_min = *x_min_max.first; x_max = *x_min_max.second;
+    y_min = *y_min_max.first; y_max = *y_min_max.second;
 
-    auto trans_x = [x_min_max] __device__ __host__(const float &f)
+    float x_min_d = x_min, x_max_d = x_max, y_min_d = y_min, y_max_d = y_max; 
+
+    auto trans_x = [x_min_d, x_max_d] __device__ __host__(const float &f)
     {
-        return (f - *x_min_max.first) / (*x_min_max.second - *x_min_max.first);
+        return (f - x_min_d) / (x_max_d - x_min_d);
     };
-    auto trans_y = [y_min_max] __device__ __host__(const float &f)
+    auto trans_y = [y_min_d, y_max_d] __device__ __host__(const float &f)
     {
-        return (f - *y_min_max.first) / (*y_min_max.second - *y_min_max.first);
+        return (f - y_min_d) / (y_max_d - y_min_d);
     };
     /* Maybe single-pass zip iterator transform - vectors of same shape? */
-    thrust::transform(x.begin(), x.end(), x_norm.begin(), trans_x);
-    thrust::transform(y.begin(), y.end(), y_norm.begin(), trans_y);
+    thrust::transform(x.begin(), x.end(), x.begin(), trans_x);
+    thrust::transform(y.begin(), y.end(), y.begin(), trans_y);
 
     code.resize(x.size());
 
-    auto zip_begin = thrust::make_zip_iterator(thrust::make_tuple(x_norm.begin(), y_norm.begin()));
-    auto zip_end = thrust::make_zip_iterator(thrust::make_tuple(x_norm.end(), y_norm.end()));
+    auto zip_begin = thrust::make_zip_iterator(thrust::make_tuple(x.begin(), y.begin()));
+    auto zip_end = thrust::make_zip_iterator(thrust::make_tuple(x.end(), y.end()));
 
     // clang-format off
     thrust::transform(zip_begin, zip_end, code.begin(), 
@@ -257,8 +272,6 @@ void ParallelQuadtreeBuilder::compute_codes()
     // clang-format on
 }
 
-/* TODO: Track offset where given quad starts in point vector. */
-/* TODO: Lowkey remove const refrecena, pass pointer */
 std::tuple<
     thrust::device_vector<uint64_t>,
     thrust::device_vector<uint32_t>,
@@ -516,7 +529,6 @@ ParallelQuadtreeBuilder::trim_redundant_nodes(
     );
 }
 
-/* Here we should also cache min/max and expand back to global coos */
 std::tuple<
     thrust::device_vector<uint32_t>,
     thrust::device_vector<float>,
@@ -529,12 +541,15 @@ ParallelQuadtreeBuilder::normalize_center_of_mass(
     uint32_t *nlen_d = nlen.data().get();
     float *x_com_d = x_com.data().get();
     float *y_com_d = y_com.data().get();
+    float x_min_d = x_min, x_max_d = x_max, y_min_d = y_min, y_max_d = y_max; 
     thrust::for_each(
         thrust::make_counting_iterator<uint32_t>(0),
         thrust::make_counting_iterator<uint32_t>(nlen.size()),
-        [nlen_d, x_com_d, y_com_d] __device__ __host__ (uint32_t i){
-            x_com_d[i] = x_com_d[i] / (float)nlen_d[i];
-            y_com_d[i] = y_com_d[i] / (float)nlen_d[i];
+        [nlen_d, x_com_d, y_com_d, x_min_d, x_max_d, y_min_d, y_max_d]
+        __device__ __host__ (uint32_t i)
+        {
+            x_com_d[i] = ((x_com_d[i] / (float)nlen_d[i]) * (x_max_d - x_min_d) + x_min_d);
+            y_com_d[i] = ((y_com_d[i] / (float)nlen_d[i]) * (y_max_d - y_min_d) + y_min_d);
         }
     );
 
@@ -546,6 +561,22 @@ ParallelQuadtreeBuilder::normalize_center_of_mass(
         std::move(nlen),
         std::move(x_com),
         std::move(y_com)
+    );
+}
+
+void ParallelQuadtreeBuilder::normalize_source_data(void)
+{
+    float *x_d = x.data().get(), *y_d = y.data().get();
+    float x_min_d = x_min, x_max_d = x_max, y_min_d = y_min, y_max_d = y_max; 
+    thrust::for_each(
+        thrust::make_counting_iterator<uint32_t>(0),
+        thrust::make_counting_iterator<uint32_t>(x.size()),
+        [x_d, y_d, x_min_d, x_max_d, y_min_d, y_max_d]
+        __device__ __host__ (uint32_t i)
+        {
+            x_d[i] = x_d[i] * (x_max_d - x_min_d) + x_min_d;
+            y_d[i] = y_d[i] * (y_max_d - y_min_d) + y_min_d;
+        }
     );
 }
 

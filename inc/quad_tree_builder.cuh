@@ -92,6 +92,8 @@ public:
         thrust::device_vector<float> x_com,
         thrust::device_vector<float> y_com
     );
+
+    void normalize_source_data(void);
     
     std::tuple<thrust::device_vector<uint64_t>,
         thrust::device_vector<uint32_t>,
@@ -107,9 +109,10 @@ public:
 
 private:
     /* Maximum of points in a single leaf */
-    static constexpr size_t T = 32;
+    static constexpr size_t T = 1;
     /* Maximum height of quadtree */
     static constexpr size_t H_max = 8;
+    float x_max, x_min, y_max, y_min;
 
     /* Input data*/
     thrust::device_vector<float> x;
