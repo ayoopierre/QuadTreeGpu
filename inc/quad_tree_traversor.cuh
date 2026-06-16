@@ -9,8 +9,27 @@
 
 #include <cstdint>
 #include <tuple>
+#include <cstdio>
 
 #include "quad_tree_builder.cuh"
+
+struct TsneApproxCond{
+    inline bool __device__ __host__ operator()(float x_com, float y_com, float x, float y){
+        return false;
+    }
+};
+
+struct TsneNodeHanlder{
+    inline float __device__ __host__ operator()(float x_com, float y_com, float x, float y){
+        return 0.0f;
+    }
+};
+
+struct TsneLeafHandler{
+    inline float __device__ __host__ operator()(float x_com, float y_com, float x, float y){
+        return 0.0f;
+    }
+};
 
 /*
     F shall be a functor which can be called to compute function for
@@ -18,10 +37,14 @@
     this way we compute gradient and write to seperate place for each point
     and after that we reduce.
 */
-template <typename F>
+template <typename ApproxCond, typename NodeHanlder, typename LeafHandler>
 class QuadTreeTraversor{
 public:
-    QuadTreeTraversor(F callback) : callback(callback) {};
+    QuadTreeTraversor() = default;
+
+    inline void set_face_lenght(float face_length){
+        this->face_length = face_length;
+    }
 
     inline void load_points(
         thrust::device_vector<float> x,
@@ -81,49 +104,96 @@ public:
     inline thrust::device_vector<float> traverse(){
         thrust::device_vector<float> res(x.size());
 
-
         uint32_t *f_pos_d = f_pos.data().get(); 
         uint32_t *length_d = length.data().get();
         uint8_t *is_leaf_d = is_leaf.data().get();
         float *x_com_d = x_com.data().get();
         float *y_com_d = y_com.data().get();
+        const float *x_d = x.data().get();
+        const float *y_d = y.data().get();
+        const float face_length_d = face_length;
         thrust::for_each(
-            thrust::make_zip_iterator(thrust::make_tuple(
-                thrust::make_counting_iterator<uint32_t>(0),
-                x.begin(),
-                y.begin())),
-            thrust::make_zip_iterator(thrust::make_tuple(
-                thrust::make_counting_iterator<uint32_t>(x.size())
-                x.end(),
-                y.end())),
-            [f_pos_d, length_d, is_leaf_d, x_com_d, y_com_d] __device__ __host__
-            (thrust::tuple<uint32_t, float, float> t){
-                uint32_t pnt_idx = thrust::get<0>(t);
+            thrust::make_zip_iterator(
+                thrust::make_tuple(
+                    thrust::make_counting_iterator<uint32_t>(0),
+                    x.begin(),
+                    y.begin()
+                )
+            ),
+            thrust::make_zip_iterator(
+                thrust::make_tuple(
+                    thrust::make_counting_iterator<uint32_t>(x.size()),
+                    x.end(),
+                    y.end()
+                )
+            ),
+            [f_pos_d, length_d, is_leaf_d, x_com_d, y_com_d, x_d, y_d, face_length_d]
+            __device__ __host__ (thrust::tuple<uint32_t, float, float> t){
+                ApproxCond approx_cond;
+                NodeHanlder node_handler;
+                LeafHandler leaf_handler;
+                
+                uint32_t idx = thrust::get<0>(t);
                 float x = thrust::get<1>(t);
                 float y = thrust::get<2>(t);
-
-                uint32_t i = 0;
-
-                uint32_t stack[ParallelQuadtreeBuilder::get_max_height()];
+                float res = 0;
+                /* Has to be at least 4 * tree_max_height */
+                uint32_t stack[128];
                 uint32_t top = 0;
 
-                while(!is_leaf_d[i]){
-                    /* Assume tree and points in global coos */ 
-                    float dist_sq = (x_com_d[i] - x) * (x_com_d[i] - x) + (y_com_d[i] - y) * (y_com_d[i] - y);
-                    float s; // Get side length from builder
+                stack[top++] = 0;
+
+                while (top)
+                {
+                    uint32_t node_idx = stack[--top];
+
+                    if (is_leaf_d[node_idx])
+                    {
+                        /* This loop can be unrolled as well */
+                        for(uint32_t i = 0; i < length_d[node_idx]; i++)
+                        {
+                            res += leaf_handler(
+                                x_d[f_pos_d[node_idx] + i],
+                                y_d[f_pos_d[node_idx] + i],
+                                x, y
+                            );
+                        }
+                        continue;
+                    }
+
+                    if(approx_cond(
+                        x_com_d[node_idx],
+                        y_com_d[node_idx],
+                        x, y)
+                    ){
+                        node_handler(
+                            x_d[f_pos_d[node_idx]],
+                            y_d[f_pos_d[node_idx]],
+                            x, y
+                        );
+                        continue;
+                    }
+
+                    #pragma unroll 4
+                    for (uint32_t i = 0; i < 4; ++i)
+                    {
+                        if(i < length_d[node_idx]) stack[top++] = f_pos_d[node_idx] + i;
+                    }
                 }
             }
-        )
+        );
+
+        return res;
     }
 
 private:
-    constexpr float theta = 0.5f;
+    constexpr float theta() { return 0.5f; };
 
-    F callback;
+    float face_length;
 
     /* Do not modify points here */
-    const thrust::device_vector<float> x;
-    const thrust::device_vector<float> y;
+    thrust::device_vector<float> x;
+    thrust::device_vector<float> y;
 
     thrust::device_vector<uint32_t> f_pos;
     thrust::device_vector<uint32_t> length;

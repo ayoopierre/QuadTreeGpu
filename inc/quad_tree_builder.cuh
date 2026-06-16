@@ -1,3 +1,6 @@
+#ifndef QUAD_TREE_BUILDER
+#define QUAD_TREE_BUILDER
+
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/transform.h>
@@ -22,11 +25,9 @@
 class ParallelQuadtreeBuilder
 {
 public:
-    using Morton = uint32_t;
-
-    ParallelQuadtreeBuilder(thrust::device_vector<float> x,
-                     thrust::device_vector<float> y,
-                     thrust::device_vector<float> m)
+    ParallelQuadtreeBuilder(thrust::device_vector<float>&& x,
+                     thrust::device_vector<float>&& y,
+                     thrust::device_vector<float>&& m)
         : x(x), y(y), m(m)
         { 
         };
@@ -43,6 +44,10 @@ public:
         thrust::device_vector<float>,
         thrust::device_vector<float>,
         thrust::device_vector<float>> retrive_arguments();
+
+    inline float get_face_len(){
+        return fmax(x_max - x_min, y_max - y_min);
+    }
 
     /* Has to stay public for lambda accessibility for thrust */
     void compute_codes();
@@ -126,3 +131,5 @@ private:
     thrust::device_vector<uint32_t> f_pos, length;
     thrust::device_vector<uint8_t> is_leaf;
 };
+
+#endif

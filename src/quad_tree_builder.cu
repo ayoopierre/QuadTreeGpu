@@ -192,17 +192,6 @@ ParallelQuadtreeBuilder::build_tree()
         std::move(clen)
     );
 
-    show_tree(
-        std::move(key),
-        std::move(is_leaf),
-        std::move(f_pos),
-        std::move(length),
-        std::move(x),
-        std::move(y),
-        std::move(x_com),
-        std::move(y_com)
-    );
-
     return {
         std::move(f_pos), 
         std::move(length),
