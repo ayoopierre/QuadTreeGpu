@@ -320,7 +320,7 @@ ParallelQuadtreeBuilder::generate_quadrants_for_level(
     );
 
     auto code_comparator = [] __device__ __host__ (uint64_t c1, uint64_t c2) {return c1 == c2; };
-    auto reduce_op = [] __device__ __host__ (
+    auto reduce_op = [level] __device__ __host__ (
         thrust::tuple<uint8_t, uint32_t, uint32_t, float, float> t1,
         thrust::tuple<uint8_t, uint32_t, uint32_t, float, float> t2
     )
@@ -330,7 +330,7 @@ ParallelQuadtreeBuilder::generate_quadrants_for_level(
             (uint32_t)(thrust::get<1>(t1) + thrust::get<1>(t2)),
             min(thrust::get<2>(t1), thrust::get<2>(t2)),
             thrust::get<3>(t1) + thrust::get<3>(t2),
-            thrust::get<4>(t1) + thrust::get<4>(t2)
+            thrust::get<4>(t1) + thrust::get<4>(t2) 
         );
     };
 
@@ -340,7 +340,7 @@ ParallelQuadtreeBuilder::generate_quadrants_for_level(
             quadrant_codes.end(),
             thrust::make_zip_iterator(
                 thrust::make_tuple(
-                    thrust::make_constant_iterator<uint8_t>(1),
+                    thrust::make_constant_iterator<uint8_t>(0),
                     thrust::make_constant_iterator<uint32_t>(1),
                     thrust::make_counting_iterator<uint32_t>(0),
                     x.begin(),
