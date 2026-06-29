@@ -1,6 +1,6 @@
-#include "inc/quad_tree_builder.cuh"
-#include "inc/node.cuh"
-#include "inc/quad_tree_traversor.cuh"
+#include "quad_tree_builder.cuh"
+#include "node.cuh"
+#include "quad_tree_traversor.cuh"
 
 #include <random>
 #include <memory>

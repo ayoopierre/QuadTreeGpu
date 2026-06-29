@@ -67,7 +67,7 @@ static inline __device__ float3 add_vec3(float3 &a, float3 b){
  normalization factor Z. Each thread will compute the part of
  normalization factor for given point and store partial value.
  After that we will reduce into single value. This is used instead
- of atomics no single value due to lock contention.
+ of atomics to single value due to lock contention.
 */
 template <typename ApproxCond, typename NodeHanlder, typename LeafHandler, bool profile = false>
 static __global__ void traverse_impl(
