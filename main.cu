@@ -36,7 +36,7 @@ int main(void)
         thrust::device_vector<float> x(host_buffer_x.get(), host_buffer_x.get() + N);
         thrust::device_vector<float> y(host_buffer_y.get(), host_buffer_y.get() + N);
         thrust::device_vector<float> m(host_buffer_z.get(), host_buffer_z.get() + N);
-        thrust::device_vector<uint32_t> f_pos, length;
+        thrust::device_vector<uint32_t> nlen, f_pos, length;
         thrust::device_vector<uint8_t> is_leaf;
         thrust::device_vector<float> x_com, y_com;
 
@@ -46,12 +46,10 @@ int main(void)
         printf("Build tree\n");
         auto beg = std::chrono::high_resolution_clock().now();
 
-        std::tie(f_pos, length, is_leaf, x_com, y_com) = p.build_tree();
+        std::tie(nlen, f_pos, length, is_leaf, x_com, y_com) = p.build_tree();
         std::tie(x, y, m) = p.retrive_arguments();
 
         std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock().now() - beg).count() << "\n";
-
-        printf("f_pos: %lu\n", f_pos.size());
 
         QuadTreeTraversor<
             TsneApproxCond,
@@ -61,12 +59,14 @@ int main(void)
 
         traversor.load_points(std::move(x), std::move(y));
         traversor.load_tree(
+            std::move(nlen),
             std::move(f_pos),
             std::move(length),
             std::move(is_leaf),
             std::move(x_com),
             std::move(y_com)
         );
+        traversor.set_face_lenght(p.get_face_len());
 
         beg = std::chrono::high_resolution_clock().now();
         traversor.traverse();

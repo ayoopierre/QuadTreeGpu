@@ -9,7 +9,7 @@
 
 #include "node.cuh"
 
-static void show_tree(thrust::device_vector<uint64_t> key, thrust::device_vector<bool> is_leaf,
+static void __attribute__((unused)) show_tree(thrust::device_vector<uint64_t> key, thrust::device_vector<bool> is_leaf,
     thrust::device_vector<uint32_t> f_pos, thrust::device_vector<uint32_t> length,
     thrust::device_vector<float> x, thrust::device_vector<float> y,
     thrust::device_vector<float> x_com, thrust::device_vector<float> y_com)
@@ -89,18 +89,8 @@ __device__ __host__ uint64_t expand_bits(uint32_t &v)
     return x;
 }
 
-template <typename T>
-static void dump_device_vector(const thrust::device_vector<T> &v, const char *prefix)
-{
-    std::cout << prefix << " : ";
-    for (const T &e : v)
-    {
-        std::cout << (uint32_t)e << ", ";
-    }
-    std::cout << std::endl;
-}
-
 std::tuple<
+    thrust::device_vector<uint32_t>,
     thrust::device_vector<uint32_t>,
     thrust::device_vector<uint32_t>,
     thrust::device_vector<uint8_t>,
@@ -185,14 +175,14 @@ ParallelQuadtreeBuilder::build_tree()
 
     normalize_source_data();
 
-    std::tie(key, f_pos, length, is_leaf) = fill_tree(
-        std::move(p_key),
+    std::tie(nlen, f_pos, length, is_leaf) = fill_tree(
         std::move(nlen),
         std::move(start),
         std::move(clen)
     );
 
     return {
+        std::move(nlen),
         std::move(f_pos), 
         std::move(length),
         std::move(is_leaf),
@@ -569,17 +559,16 @@ void ParallelQuadtreeBuilder::normalize_source_data(void)
     );
 }
 
-std::tuple<thrust::device_vector<uint64_t>,
+std::tuple<thrust::device_vector<uint32_t>,
     thrust::device_vector<uint32_t>,
     thrust::device_vector<uint32_t>,
     thrust::device_vector<uint8_t>>
 ParallelQuadtreeBuilder::fill_tree(
-    thrust::device_vector<uint64_t> p_key, 
     thrust::device_vector<uint32_t> nlen,
     thrust::device_vector<uint32_t> start,
     thrust::device_vector<uint8_t> clen)
 {
-    thrust::device_vector<uint8_t> is_leaf(p_key.size());
+    thrust::device_vector<uint8_t> is_leaf(nlen.size());
     size_t threshold = T;
     uint32_t *nlen_d = nlen.data().get();
     uint8_t *clen_d = clen.data().get();
@@ -629,12 +618,12 @@ ParallelQuadtreeBuilder::fill_tree(
     /* Normalize center of mass */
 
     return std::make_tuple<
-        thrust::device_vector<uint64_t>,
+        thrust::device_vector<uint32_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint8_t>>
     (
-        std::move(p_key), std::move(f_pos),
+        std::move(nlen), std::move(f_pos),
         std::move(length), std::move(is_leaf)
     );
 }

@@ -5,11 +5,14 @@ Refrence: https://adms-conf.org/2019-camera-ready/zhang_adms19.pdf
 Note: Fix building for stanalone library for linking to pure C++ projects.
 
 # Issues
+## Memory allocation synchronization bottleneck
 Using Nsight Compute and Nsight Systems tools following observations an be made:
 1. Total kernel computation takes time in tens of ms dominating operation being sort which took ~4ms.
 2. Execution is dominated by cudaMalloc, cudaFree and synchronization between streams.
 
 In code there can be seen that there are many allocations/deallocations of temporary vectors which are required in the algorithm.
+
+## Traversal
 
 # Summary of level on finest level
 If this is the lowest level we can compute center of mass
@@ -45,4 +48,3 @@ auto begin = thrust::make_transform_iterator(
 We have nlen of each child as well as COM of each child. Simply do weighted average of those.
 
 # TODO
-Change quadrant generation to rely more on reduce_by_key

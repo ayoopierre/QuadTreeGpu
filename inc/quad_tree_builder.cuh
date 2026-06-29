@@ -21,6 +21,7 @@
 #include <tuple>
 
 #include "allocators.cuh"
+#include "quad_tree_config.cuh"
 
 class ParallelQuadtreeBuilder
 {
@@ -34,6 +35,7 @@ public:
 
     
     std::tuple<
+        thrust::device_vector<uint32_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint8_t>,
@@ -100,12 +102,11 @@ public:
 
     void normalize_source_data(void);
     
-    std::tuple<thrust::device_vector<uint64_t>,
+    std::tuple<thrust::device_vector<uint32_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint32_t>,
         thrust::device_vector<uint8_t>>
     fill_tree(
-        thrust::device_vector<uint64_t> p_key, 
         thrust::device_vector<uint32_t> nlen,
         thrust::device_vector<uint32_t> start,
         thrust::device_vector<uint8_t> clen);
@@ -114,9 +115,9 @@ public:
 
 private:
     /* Maximum of points in a single leaf */
-    static constexpr size_t T = 1;
+    static constexpr size_t T = QUAD_TREE_LEAF;
     /* Maximum height of quadtree */
-    static constexpr size_t H_max = 8;
+    static constexpr size_t H_max = QUAD_TREE_MAX_HEIGHT;
     float x_max, x_min, y_max, y_min;
 
     /* Input data*/
