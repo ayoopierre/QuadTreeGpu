@@ -26,6 +26,7 @@
 class ParallelQuadtreeBuilder
 {
 public:
+    ParallelQuadtreeBuilder() {};
     ParallelQuadtreeBuilder(thrust::device_vector<float>&& x,
                      thrust::device_vector<float>&& y,
                      thrust::device_vector<float>&& m)
@@ -33,6 +34,13 @@ public:
         { 
         };
 
+    void bind_arguments(
+        thrust::device_vector<float> x,
+        thrust::device_vector<float> y
+    ){
+        this->x = std::move(x);
+        this->y = std::move(y);
+    }
     
     std::tuple<
         thrust::device_vector<uint32_t>,

@@ -1,3 +1,5 @@
+#define NCCL_DEBUG INFO
+
 #include "quad_tree_builder.cuh"
 #include "node.cuh"
 #include "quad_tree_traversor.cuh"
@@ -25,60 +27,53 @@ std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
 
 constexpr size_t N = 1000000;
 
-int main(void)
+int main(int argc, char** argv)
 {
-    try
-    {
-        printf("Allocate points\n");
-        auto host_buffer_x = generate_random_floats(N, -1.0f, 1.0f);
-        auto host_buffer_y = generate_random_floats(N, -1.0f, 1.0f);
-        auto host_buffer_z = generate_random_floats(N, 0.0f, 1.0f);
-        printf("Create GPU vectors\n");
-        thrust::device_vector<float> x(host_buffer_x.get(), host_buffer_x.get() + N);
-        thrust::device_vector<float> y(host_buffer_y.get(), host_buffer_y.get() + N);
-        thrust::device_vector<float> m(host_buffer_z.get(), host_buffer_z.get() + N);
-        thrust::device_vector<uint32_t> nlen, f_pos, length;
-        thrust::device_vector<uint8_t> is_leaf;
-        thrust::device_vector<float> x_com, y_com;
+    printf("Init MPI context\n");
+    MPI_Init(&argc, &argv);
 
-        printf("Create class\n");
-        ParallelQuadtreeBuilder p(std::move(x), std::move(y), std::move(m));
+    printf("Create MPI Ring topology\n");
+    NcclRing ring(MPI_COMM_WORLD);
 
-        printf("Build tree\n");
-        auto beg = std::chrono::high_resolution_clock().now();
+    constexpr size_t N = 1024;
 
-        std::tie(nlen, f_pos, length, is_leaf, x_com, y_com) = p.build_tree();
-        std::tie(x, y, m) = p.retrive_arguments();
+    float *sendbuf, *recvbuf;
 
-        std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock().now() - beg).count() << "\n";
+    printf("Prepare tensors\n");
+    cudaMalloc(&sendbuf, N * sizeof(float));
+    cudaMalloc(&recvbuf, N * sizeof(float));
 
-        QuadTreeTraversor<
-            TsneApproxCond,
-            TsneNodeHanlder,
-            TsneLeafHandler
-        > traversor;
+    printf("Start group\n");
+    // Send to the right, receive from the left.
+    ncclGroupStart();
 
-        traversor.load_points(std::move(x), std::move(y));
-        traversor.load_tree(
-            std::move(nlen),
-            std::move(f_pos),
-            std::move(length),
-            std::move(is_leaf),
-            std::move(x_com),
-            std::move(y_com)
-        );
-        traversor.set_face_lenght(p.get_face_len());
+    printf("Enqueue send operation\n");
+    NCCL_CHECK(ncclSend(
+        sendbuf,
+        N,
+        ncclFloat,
+        ring.right(),
+        ring.comm(),
+        ring.stream()));
 
-        beg = std::chrono::high_resolution_clock().now();
-        traversor.traverse();
-        std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock().now() - beg).count() << "\n";
+    printf("Enqueue recv operation\n");
+    NCCL_CHECK(ncclRecv(
+        recvbuf,
+        N,
+        ncclFloat,
+        ring.left(),
+        ring.comm(),
+        ring.stream()));
 
-        cudaDeviceSynchronize();
-    }
-    catch(...)
-    {
-        printf("It seems that we throw and arena was to small\n");
-    }
+    printf("End group\n");
+    ncclGroupEnd();
+    printf("Sent tensors\n");
 
-    return 0;
+    printf("Synchronize NCCL stream\n");
+    cudaStreamSynchronize(ring.stream());
+
+    cudaFree(sendbuf);
+    cudaFree(recvbuf);
+
+    MPI_Finalize();
 }

@@ -4,6 +4,7 @@
 #include <mpi.h>
 #include <nccl.h>
 #include <cuda_runtime.h>
+#include <thrust/device_vector.h>
 
 #include <stdexcept>
 #include <vector>
@@ -47,14 +48,52 @@ public:
         CUDA_CHECK(cudaSetDevice(local_rank));
         CUDA_CHECK(cudaStreamCreate(&stream_));
 
+        /* Generate NCCL unique id on global rank 0 */
         ncclUniqueId id;
         if (rank_ == 0)
             NCCL_CHECK(ncclGetUniqueId(&id));
 
+        /* Broadcast NCCL session id */
         MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, mpi_comm_);
 
         /* Initialize with global rank */
         NCCL_CHECK(ncclCommInitRank(&comm_, size_, id, rank_));
+    }
+
+    template <typename T>
+    thrust::device_vector<T> ring_exchange(thrust::device_vector<T> out){
+        size_t send_size = out.size(), recv_size;
+
+        ncclGroupStart();
+        ncclSend( &send_size, 1,
+            ncclUint64, right(),
+            comm_, stream_);
+
+        ncclRecv(
+            &recv_size, 1, 
+            ncclUint64, left(),
+            comm_, stream_);
+
+        ncclGroupEnd();
+        cudaStreamSynchronize(stream_);
+
+        thrust::device_vector<T> in(recv_size);
+
+        ncclGroupStart();
+        ncclSend(
+            out.data().get(), send_size,
+            ncclChar, right(),
+            comm_, stream_);
+
+        ncclRecv(
+            in.data().get(), recv_size, 
+            ncclChar, left(),
+            comm_, stream_);
+
+        ncclGroupEnd();
+        cudaStreamSynchronize(stream_);
+
+        return std::move(in);
     }
 
     ~NcclRing()
