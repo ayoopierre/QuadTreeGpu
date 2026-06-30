@@ -1,6 +1,7 @@
 #include "quad_tree_builder.cuh"
 #include "node.cuh"
 #include "quad_tree_traversor.cuh"
+#include "NcclRing.cuh"
 
 #include <random>
 #include <memory>
