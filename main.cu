@@ -27,53 +27,55 @@ std::unique_ptr<float[]> generate_random_floats(size_t N, float min, float max)
 
 constexpr size_t N = 1000000;
 
+static std::tuple<
+    thrust::device_vector<float>, // X back
+    thrust::device_vector<float>, // Y back
+    thrust::device_vector<float>, // X grad
+    thrust::device_vector<float>, // Y grad 
+    float // Z
+> circulate(
+    NcclRing& ring,
+    QuadTreeTraversor<TsneApproxCond, TsneNodeHanlder, TsneLeafHandler>& traversor,
+    thrust::device_vector<float> x,
+    thrust::device_vector<float> y
+){
+    thrust::device_vector<float> grad_x{}, grad_y{};
+    float z{0.0f}, tmp_z{0.0f};
+    for(size_t i{0}; i < ring.size(); i++){
+        traversor.load_points(std::move(x), std::move(y));
+        /* TODO: grad vals zero initialized - take previous calc into account */
+        std::tie(grad_x, grad_y, tmp_z) = traversor.traverse();
+
+        z += tmp_z;
+
+        x = ring.ring_exchange(std::move(x));
+        y = ring.ring_exchange(std::move(y));
+        grad_x = ring.ring_exchange(std::move(grad_x));
+        grad_y = ring.ring_exchange(std::move(grad_y));
+    }
+    /* To get back original tensor we need one more hop */
+    x = ring.ring_exchange(std::move(x));
+    y = ring.ring_exchange(std::move(y));
+    grad_x = ring.ring_exchange(std::move(grad_x));
+    grad_y = ring.ring_exchange(std::move(grad_y));
+
+    return std::tuple<
+        thrust::device_vector<float>, // X back
+        thrust::device_vector<float>, // Y back
+        thrust::device_vector<float>, // X grad
+        thrust::device_vector<float>, // Y grad 
+        float // Z
+    >{
+        std::move(x), std::move(y),
+        std::move(grad_x), std::move(grad_y),
+        z
+    };
+}
+
 int main(int argc, char** argv)
 {
-    printf("Init MPI context\n");
     MPI_Init(&argc, &argv);
-
-    printf("Create MPI Ring topology\n");
     NcclRing ring(MPI_COMM_WORLD);
-
-    constexpr size_t N = 1024;
-
-    float *sendbuf, *recvbuf;
-
-    printf("Prepare tensors\n");
-    cudaMalloc(&sendbuf, N * sizeof(float));
-    cudaMalloc(&recvbuf, N * sizeof(float));
-
-    printf("Start group\n");
-    // Send to the right, receive from the left.
-    ncclGroupStart();
-
-    printf("Enqueue send operation\n");
-    NCCL_CHECK(ncclSend(
-        sendbuf,
-        N,
-        ncclFloat,
-        ring.right(),
-        ring.comm(),
-        ring.stream()));
-
-    printf("Enqueue recv operation\n");
-    NCCL_CHECK(ncclRecv(
-        recvbuf,
-        N,
-        ncclFloat,
-        ring.left(),
-        ring.comm(),
-        ring.stream()));
-
-    printf("End group\n");
-    ncclGroupEnd();
-    printf("Sent tensors\n");
-
-    printf("Synchronize NCCL stream\n");
-    cudaStreamSynchronize(ring.stream());
-
-    cudaFree(sendbuf);
-    cudaFree(recvbuf);
 
     MPI_Finalize();
 }

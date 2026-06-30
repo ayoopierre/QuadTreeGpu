@@ -61,7 +61,7 @@ public:
     }
 
     template <typename T>
-    thrust::device_vector<T> ring_exchange(thrust::device_vector<T> out){
+    inline thrust::device_vector<T> ring_exchange(thrust::device_vector<T> out){
         size_t send_size = out.size(), recv_size;
 
         ncclGroupStart();
@@ -104,15 +104,15 @@ public:
             cudaStreamDestroy(stream_);
     }
 
-    int rank() const { return rank_; }
-    int size() const { return size_; }
+    inline int rank() const { return rank_; }
+    inline int size() const { return size_; }
 
-    int left() const
+    inline int left() const
     {
         return (rank_ - 1 + size_) % size_;
     }
 
-    int right() const
+    inline int right() const
     {
         return (rank_ + 1) % size_;
     }
