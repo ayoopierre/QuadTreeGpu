@@ -105,17 +105,17 @@ static __global__ void traverse_impl(
          In initial 100k benchmark this kernel has almost 
          perfect stats. ~99.7% L1 hit rate, ~99.9% L2 hit 
          rate and 100% branch eff. due to no approx cond.
-         This worked well since tree and points fit in cache.
-         1mln points killed performance due to large number of
-         global memory access. Caching top levels in global
-         memory can hugely reduce global memory access.
-         Validated with ncu. 
+         With approx cond on. and spatiall sort on random
+         data, traversal keep ~80% branch eff. Highest
+         levels are abused. Most of data fits in L2 cache
+         and we got nice stats there, however keeping
+         top levels might improce L1 hit rate.
         */
 
         float3 res { 0.0f, 0.0f, 0.0f };
         /* Has to be at least 4 * tree_max_height */
         uint32_t stack[4 * QUAD_TREE_MAX_HEIGHT];
-        uint8_t depth_stack[128 * QUAD_TREE_MAX_HEIGHT];
+        uint8_t depth_stack[4 * QUAD_TREE_MAX_HEIGHT];
         uint32_t top = 0;
 
         top++;        
@@ -177,9 +177,9 @@ static __global__ void traverse_impl(
             }
         }
 
-        res_x_d[tid] = res.x;
-        res_y_d[tid] = res.y;
-        res_z_d[tid] = res.z;
+        res_x_d[tid] += res.x;
+        res_y_d[tid] += res.y;
+        res_z_d[tid] += res.z;
     }
 }
 
@@ -254,12 +254,13 @@ public:
         thrust::device_vector<float>,
         thrust::device_vector<float>,
         float
-    > traverse(){
+    > traverse(
+        thrust::device_vector<float> res_x,
+        thrust::device_vector<float> res_y
+    ){
         size_t size = x.size();
 
-        thrust::device_vector<float> res_x(size);
-        thrust::device_vector<float> res_y(size);
-        thrust::device_vector<float> res_z(size);
+        thrust::device_vector<float> res_z(size, 0.0f);
 
         float
             *res_x_d = res_x.data().get(),
